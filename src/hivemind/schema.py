@@ -299,7 +299,11 @@ class AgentSpec(_Model):
     knowledge: list[str] = Field(default_factory=list)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
+    # Why this agent exists - ids from `goals` in hivemind.yaml
+    goals: list[str] = Field(default_factory=list)
+
     # Operations
+    max_concurrent_tasks: int = Field(default=1, ge=1, le=20)
     channels: Channels = Field(default_factory=Channels)
     schedules: list[Schedule] = Field(default_factory=list)
     budget: Budget = Field(default_factory=Budget)
@@ -347,14 +351,70 @@ class OrgMemory(_Model):
     scopes: dict[str, MemoryScopeDef] = Field(default_factory=dict)
 
 
+class TaskQueueConfig(_Model):
+    """Agent-to-agent work is queued as tasks. ``sharepoint`` keeps the queue in a SharePoint list so people
+    can see, create and follow tasks in SharePoint, Teams or the Lists app."""
+
+    backend: Literal["sharepoint", "in_memory"] = "sharepoint"
+    workers: int = Field(default=4, ge=0, le=64, description="Concurrent task runs per hub replica (0 = none).")
+    poll_seconds: float = Field(default=10, gt=0)
+    lease_minutes: int = Field(default=15, ge=1, description="A claimed task returns to the queue after this.")
+    max_attempts: int = Field(default=3, ge=1)
+    wait_seconds: int = Field(
+        default=45,
+        ge=0,
+        le=300,
+        description="How long a delegating agent waits for a result (keep under the MCP call timeout).",
+    )
+    max_tasks_per_request: int = Field(
+        default=30, ge=1, description="Cap on tasks spawned from one original request, to stop runaway loops."
+    )
+
+
 class HubConfig(_Model):
-    """The HiveMind Hub: an MCP server granted to every agent for delegation, escalation, review and
-    shared memory. Disable it to run agents as isolated Foundry agents."""
+    """The HiveMind Hub: an MCP server granted to every agent for delegation, escalation, review, shared memory,
+    tasks and outputs. Disable it to run agents as isolated Foundry agents."""
 
     enabled: bool = True
     url: str | None = None
-    connection: str | None = Field(default=None, description="Project connection holding the hub's API key.")
+    connection: str | None = Field(
+        default=None,
+        description="Foundry project connection the hub tool authenticates with: an agentic-identity connection "
+        "(auth: entra) or a custom-keys connection holding x-hivemind-key (auth: key).",
+    )
+    auth: Literal["entra", "key"] = Field(
+        default="entra",
+        description="'entra': validate the agent's Microsoft Entra token. 'key': shared key (development).",
+    )
+    audience: str | None = Field(default=None, description="Expected token audience (the hub's app ID URI).")
+    tenant_id: str | None = None
     max_delegation_depth: int = Field(default=4, ge=1, le=10)
+    tasks: TaskQueueConfig = Field(default_factory=TaskQueueConfig)
+
+
+class SharePointConfig(_Model):
+    """The HiveMind SharePoint site: where non-technical people shape and follow the agents.
+
+    * ``rules_library``   - Word/markdown rules by convention: Organisation/, Roles/<role>/, Teams/<team>/,
+                            Agents/<agent>/. Every file is added to the matching instruction layer.
+    * ``outputs_library`` - documents agents produce (``save_output``), filed by team and agent.
+    * ``tasks_list``      - the task queue, visible and editable by people.
+    """
+
+    site: str = Field(description="e.g. contoso.sharepoint.com/sites/HiveMind")
+    rules_library: str = "Agent Rules"
+    outputs_library: str = "Agent Outputs"
+    tasks_list: str = "Agent Tasks"
+    output_format: Literal["docx", "md"] = "docx"
+
+
+class GoalDef(_Model):
+    """An organisational goal. Tasks and agents link to goals so every piece of work carries its 'why'."""
+
+    title: str
+    description: str = ""
+    parent: str | None = None
+    owner: str | None = None
 
 
 class Defaults(_Model):
@@ -396,6 +456,11 @@ class Environment(_Model):
     model_overrides: dict[str, str] = Field(default_factory=dict)
     disabled_agents: list[str] = Field(default_factory=list)
     hub_url: str | None = None
+    sharepoint_site: str | None = Field(default=None, description="Overrides sharepoint.site for this environment.")
+    sharepoint_local_dir: str | None = Field(
+        default=None,
+        description="Use a local folder (relative to the org dir) instead of SharePoint - for local runs and tests.",
+    )
 
 
 class OrgInfo(_Model):
@@ -408,6 +473,8 @@ class OrgConfig(_Model):
     org: OrgInfo
     defaults: Defaults
     teams: dict[str, TeamDef] = Field(default_factory=dict)
+    goals: dict[str, GoalDef] = Field(default_factory=dict)
+    sharepoint: SharePointConfig | None = None
     memory: OrgMemory = Field(default_factory=OrgMemory)
     hub: HubConfig = Field(default_factory=HubConfig)
     models: ModelPolicy = Field(default_factory=ModelPolicy)

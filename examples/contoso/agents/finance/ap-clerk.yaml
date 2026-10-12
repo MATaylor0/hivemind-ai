@@ -9,10 +9,10 @@ owner: ap.lead@contoso.com
 reports_to: finance-manager
 reviewed_by: compliance-reviewer
 collaborates_with: [fpa-analyst]
+goals: [working-capital]
 instructions:
   - file: instructions/agents/ap-clerk.md
-  # Business-owned exceptions list, edited in SharePoint without a pull request:
-  # - sharepoint: {site: contoso.sharepoint.com/sites/Finance, path: "Agents/ap-clerk-exceptions.md"}
+  # Plus any Word documents the AP team drops into "Agent Rules/Agents/ap-clerk" on the HiveMind site.
 tools: [erp-invoices, fabric-finance-warehouse]
 memory:
   private: true

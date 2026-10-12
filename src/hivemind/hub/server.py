@@ -1,33 +1,29 @@
-"""MCP front door for ``HubService`` (streamable HTTP, which Foundry's MCP tool speaks).
+"""MCP front door for ``HubService`` (streamable HTTP, which Foundry's MCP tool speaks), plus the task runner.
 
-Authentication
---------------
-Foundry attaches the hub's project connection (a "custom keys" connection holding ``x-hivemind-key``)
-to every hub tool call; the hub rejects calls without the right key. The calling agent is identified
-by the ``x-hivemind-agent`` header that HiveMind writes into each agent definition at deploy time.
-Only principals who can edit agent definitions in the Foundry project can change that header, so the
-trust boundary is the project itself. See docs/architecture.md ("Trust boundaries") for hardening with
-Microsoft Entra Agent ID.
+Authentication is pluggable (see ``hub.auth``): Microsoft Entra agent identity tokens in production, a shared
+key for development. The calling agent's identity is resolved per request; tools never take a "caller" argument.
 """
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 import sys
+import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from ..compiler import HUB_AGENT_HEADER
 from ..loader import Org
+from ..tasks import task_store_for
+from ..workspace import workspace_for
+from .auth import Authenticator, EntraAuthenticator, KeyAuthenticator, identities_from_deployed
 from .memory import FoundryMemoryBackend, InMemoryBackend, MemoryBackend
 from .service import Dispatcher, HubError, HubService, audit_log
+from .worker import TaskRunner
 
-KEY_HEADER = "x-hivemind-key"
 T = TypeVar("T")
 log = logging.getLogger("hivemind.hub")
 
@@ -58,55 +54,95 @@ def build_service(org: Org, memory: MemoryBackend | None = None, dispatch: Dispa
     if memory is None:
         if org.config.memory.backend == "foundry" and org.env.provider == "foundry":
             client = _foundry_client(org)
-            memory = FoundryMemoryBackend(
-                client, f"{org.env.name_prefix}{org.config.memory.store}"
-            )  # see shared_memory_store
+            memory = FoundryMemoryBackend(client, f"{org.env.name_prefix}{org.config.memory.store}")
         else:
             memory = InMemoryBackend()
     if dispatch is None:
-        if org.env.provider != "foundry":
-            raise RuntimeError("a dispatcher is required when the environment is not a Foundry environment")
-        dispatch = foundry_dispatcher(client or _foundry_client(org))
-    return HubService(org, memory, dispatch)
+        if org.env.provider == "foundry":
+            dispatch = foundry_dispatcher(client or _foundry_client(org))
+        else:
+            from ..providers import provider_for
+
+            dispatch = provider_for(org).invoke
+    return HubService(org, memory, dispatch, tasks=task_store_for(org), workspace=workspace_for(org))
 
 
-def create_server(service: HubService, api_key: str | None) -> MCPServer:
+def build_authenticator(org: Org, insecure: bool = False) -> Authenticator:
+    hub = org.config.hub
+    if hub.auth == "key" or insecure or org.env.provider != "foundry":
+        key = os.environ.get("HIVEMIND_HUB_KEY")
+        if not key and not insecure:
+            raise RuntimeError("set HIVEMIND_HUB_KEY (or pass --insecure for local development)")
+        return KeyAuthenticator(key)
+    tenant = hub.tenant_id or os.environ.get("AZURE_TENANT_ID")
+    if not tenant or not hub.audience:
+        raise RuntimeError("hub.auth is 'entra': set hub.tenant_id (or AZURE_TENANT_ID) and hub.audience")
+    from ..providers import provider_for
+
+    provider = provider_for(org)
+    return EntraAuthenticator(tenant, hub.audience, lambda: identities_from_deployed(provider.list_managed()))
+
+
+def create_server(service: HubService, authenticator: Authenticator) -> MCPServer:
     server = MCPServer(
         name="hivemind",
-        instructions="HiveMind hub: delegate to colleagues, escalate, request review and use shared memory.",
+        instructions="HiveMind hub: delegate to colleagues, escalate, request review, track tasks, save outputs "
+        "and use shared memory.",
     )
 
     def guarded(call: Callable[..., T], ctx: Context, *args: Any) -> T:
         """Return refusals to the calling agent verbatim so it can correct course (e.g. pick an allowed colleague)."""
         try:
-            return call(caller(ctx), *args)
+            return call(authenticator.identify(ctx.headers or {}), *args)
         except HubError as exc:
             raise ToolError(str(exc)) from exc
-
-    def caller(ctx: Context) -> str:
-        headers = {k.lower(): v for k, v in (ctx.headers or {}).items()}
-        if api_key is not None and not hmac.compare_digest(headers.get(KEY_HEADER, ""), api_key):
-            raise HubError("unauthorised: missing or invalid hub key")
-        agent = headers.get(HUB_AGENT_HEADER, "")
-        if not agent:
-            raise HubError(f"missing {HUB_AGENT_HEADER} header")
-        return agent
 
     @server.tool(description="List the agents in the organisation and your relationship to each.")
     def list_colleagues(ctx: Context) -> list[dict[str, str]]:
         return guarded(service.list_colleagues, ctx)
 
-    @server.tool(description="Hand a well-scoped task to a direct report or collaborator and return their answer.")
-    def delegate_task(to: str, task: str, ctx: Context, context: str = "") -> str:
-        return guarded(service.delegate_task, ctx, to, task, context)
+    @server.tool(
+        description="Give a well-scoped task to a direct report or collaborator. Returns the result if it finishes "
+        "within wait_seconds, otherwise a task id (the result then arrives as a follow-up task). Pass parent_task "
+        "when working on a task, and goal to link the work to an organisational goal."
+    )
+    def delegate_task(
+        to: str,
+        task: str,
+        ctx: Context,
+        context: str = "",
+        parent_task: str | None = None,
+        goal: str | None = None,
+        wait_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        return guarded(service.delegate_task, ctx, to, task, context, parent_task, goal, wait_seconds)
 
-    @server.tool(description="Escalate an issue to your manager and return their response.")
-    def escalate(issue: str, ctx: Context, context: str = "") -> str:
-        return guarded(service.escalate, ctx, issue, context)
+    @server.tool(description="Escalate an issue to your manager. Returns their response or a task id.")
+    def escalate(
+        issue: str, ctx: Context, context: str = "", parent_task: str | None = None, wait_seconds: int | None = None
+    ) -> dict[str, Any]:
+        return guarded(service.escalate, ctx, issue, context, parent_task, wait_seconds)
 
     @server.tool(description="Ask your reviewer to approve work. Returns APPROVED or CHANGES REQUIRED with reasons.")
-    def request_review(work: str, ctx: Context, criteria: str = "") -> str:
-        return guarded(service.request_review, ctx, work, criteria)
+    def request_review(
+        work: str, ctx: Context, criteria: str = "", parent_task: str | None = None, wait_seconds: int | None = None
+    ) -> dict[str, Any]:
+        return guarded(service.request_review, ctx, work, criteria, parent_task, wait_seconds)
+
+    @server.tool(description="Get the status and result of a task you requested or were assigned.")
+    def check_task(task_id: str, ctx: Context) -> dict[str, Any]:
+        return guarded(service.check_task, ctx, task_id)
+
+    @server.tool(description="List your open tasks: work assigned to you and work you are waiting on.")
+    def my_tasks(ctx: Context) -> dict[str, list[dict[str, str]]]:
+        return guarded(service.my_tasks, ctx)
+
+    @server.tool(
+        description="Save a finished document (markdown content) to your team's SharePoint outputs library and get "
+        "a link to share. Attaches the link to your current task."
+    )
+    def save_output(title: str, content: str, ctx: Context, task_id: str | None = None) -> dict[str, str]:
+        return guarded(service.save_output, ctx, title, content, task_id)
 
     @server.tool(description="Store a durable fact, decision or outcome in a shared memory scope.")
     def remember(scope: str, content: str, ctx: Context) -> dict[str, str]:
@@ -128,11 +164,18 @@ def serve(org: Org, host: str = "0.0.0.0", port: int = 8080, insecure: bool = Fa
     audit_log.addHandler(handler)
     audit_log.setLevel(logging.INFO)
     audit_log.propagate = False
-    api_key = os.environ.get("HIVEMIND_HUB_KEY")
-    if not api_key and not insecure:
-        raise RuntimeError("set HIVEMIND_HUB_KEY (or pass --insecure for local development)")
+
     service = build_service(org)
-    server = create_server(service, api_key)
+    server = create_server(service, build_authenticator(org, insecure))
+
+    stop = threading.Event()
+    if service.config.workers > 0:
+        runner = TaskRunner(service)
+        threading.Thread(target=runner.serve, args=(stop,), name="hm-task-runner", daemon=True).start()
+
     log.info("HiveMind hub serving %d agents on %s:%d", len(service.chart.agents), host, port)
-    # Stateless JSON responses let the hub scale out behind a load balancer (e.g. Azure Container Apps).
-    server.run(transport="streamable-http", host=host, port=port, stateless_http=True, json_response=True)
+    try:
+        # Stateless JSON responses let the hub scale out behind a load balancer (e.g. Azure Container Apps).
+        server.run(transport="streamable-http", host=host, port=port, stateless_http=True, json_response=True)
+    finally:
+        stop.set()

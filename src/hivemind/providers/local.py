@@ -86,8 +86,19 @@ class LocalProvider(Provider):
         self._save(state)
         return f"recorded local publication of {name} (scope={channel.scope})"
 
+    def set_enabled(self, name: str, enabled: bool) -> None:
+        state = self._load()
+        if name not in state["agents"]:
+            raise KeyError(f"agent '{name}' is not deployed")
+        paused = set(state.setdefault("paused", []))
+        (paused.discard if enabled else paused.add)(name)
+        state["paused"] = sorted(paused)
+        self._save(state)
+
     def invoke(self, name: str, message: str) -> str:
         agents = self._load()["agents"]
         if name not in agents:
             raise KeyError(f"agent '{name}' is not deployed")
+        if name in self._load().get("paused", []):
+            raise RuntimeError(f"agent '{name}' is paused")
         return f"[local:{name}] received: {message}"

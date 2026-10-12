@@ -24,17 +24,21 @@ agents built on **one** framework, with engineering-grade control:
 | Add an agent without a custom build | One YAML file plus a markdown job description. `hivemind new` scaffolds both. |
 | Repeatable, reviewable, reversible | Specs live in git. `plan` shows the diff, `apply` creates a new immutable Foundry agent version. |
 | Part shared, part private knowledge | Instructions and knowledge are layered: **org → role → team → agent**. Knowledge sources have audiences. |
-| Business-owned instructions | Any instruction layer can come from SharePoint; edits show up in `plan` like code changes. |
+| Business-owned instructions | A **HiveMind SharePoint site**: business users drop Word documents into an organisation, role, team or agent folder, and the agents follow them. Edits show up in `plan` and sync hourly. |
 | Any tool, including custom MCP | A tool catalog: MCP servers (Fabric, your own), OpenAPI, AI Search, SharePoint, Fabric data agents, Work IQ and more. |
 | Agents that work as a team | A hierarchy (reports to, reviewed by, collaborates with) that drives instructions *and* enforced permissions. |
+| Work that can be tracked | Delegation, escalation and review become **tasks** in a SharePoint list, with goal ancestry, parent tasks, atomic claims, retries and follow-ups. People can assign tasks to agents in the same list. |
+| Outputs people can use | Agents save Word documents to an "Agent Outputs" library, filed by team and agent. |
+| Real identities | Uses the Microsoft Entra agent identities Foundry provisions. The hub verifies agent tokens; no shared secrets in production. |
 | Shared organisational memory | Scoped memory (`org`, `team:<x>`, custom scopes) with read/write ACLs, on Foundry memory stores. |
 | Unattended and in M365 | Schedules become Foundry routines; `hivemind publish` puts an agent in Microsoft 365 Copilot and Teams. |
-| Governance and cost | Policy checks in CI (owners, budgets, model allow-list, reviewers for write tools), fleet inventory, cost queries. |
+| Governance and cost | Policy checks in CI (owners, budgets, model allow-list, reviewers for write tools), fleet inventory, cost queries, pause/resume. |
 
 HiveMind **builds as little as possible**. Foundry runs the agents, versions them, hosts memory and schedules,
 traces every call and publishes to M365. HiveMind adds the parts Microsoft doesn't provide out of the box: the
-declarative org model, the compiler, the hierarchy-aware hub, and fleet governance. See
-[docs/architecture.md](docs/architecture.md).
+declarative org model, the compiler, the hierarchy-aware hub and task queue, and fleet governance. See
+[docs/architecture.md](docs/architecture.md), and [docs/paperclip-review.md](docs/paperclip-review.md) for the ideas
+we took from the open-source Paperclip project and the ones we didn't.
 
 ## Quick start
 
@@ -48,7 +52,13 @@ hivemind render ap-clerk -e local       # the exact instructions + tools ap-cler
 hivemind plan -e local                  # what would change
 hivemind apply -e local                 # deploy to a local file-backed provider (no Azure needed)
 hivemind inventory -e local             # the fleet, with deployed versions
+hivemind tasks add finance-manager "Day-2 close status for the CFO" --goal fast-close -e local
+hivemind tasks run -e local             # work the queue (the hub does this continuously)
+hivemind tasks list -e local
 ```
+
+The local environment uses `examples/contoso/sharepoint/` as a stand-in for the SharePoint site. Look at
+`Agent Rules/Agents/ap-clerk/Supplier exceptions.docx`, then `hivemind render ap-clerk -e local`.
 
 Then deploy to Foundry for real:
 
@@ -59,6 +69,7 @@ hivemind plan  -e dev
 hivemind apply -e dev
 hivemind invoke finance-manager "Where are we with month-end close?" -e dev
 hivemind publish chief-of-staff -e dev  # Microsoft 365 Copilot + Teams
+hivemind sharepoint provision -e dev    # rules/outputs libraries + task list on the HiveMind site
 ```
 
 ## Adding an agent
@@ -71,6 +82,9 @@ hivemind new treasury-analyst --role worker --team finance --reports-to finance-
 Edit `agents/finance/treasury-analyst.yaml` (tools, knowledge, schedules) and
 `instructions/agents/treasury-analyst.md` (its job), open a pull request, and CI validates it. Its manager's
 instructions pick up the new report automatically. See [docs/authoring-agents.md](docs/authoring-agents.md).
+
+After deployment, the business owns the detail: `sharepoint provision` creates an `Agents/treasury-analyst` rules
+folder for them. See [docs/business-users.md](docs/business-users.md).
 
 ## Repository layout
 
@@ -85,9 +99,13 @@ src/hivemind/           the framework
   policy.py             governance checks
   planner.py            plan / apply
   providers/            foundry (azure-ai-projects) and local
-  hub/                  the HiveMind hub MCP server (delegation, escalation, review, shared memory)
+  hub/                  the HiveMind hub: MCP server, task runner, Entra/key authentication
+  tasks.py              the task queue (SharePoint list, file or memory)
+  workspace.py          the SharePoint site: rules in, outputs out
+  sharepoint.py         site provisioning
+  graph.py, docx.py     minimal Microsoft Graph client; Word read/write
   reporting.py          inventory and budgets
-examples/contoso/       a complete example organisation
+examples/contoso/       a complete example organisation (with a local SharePoint stand-in)
 observability/          KQL for per-agent cost and hub activity
 deploy/                 hub container image
 .github/workflows/      CI (validate on every PR) and deploy (OIDC to Foundry)
@@ -108,11 +126,16 @@ docs/                   architecture, authoring guide, roadmap
 | `hivemind apply -e ENV [--prune] [--yes]` | Create agent versions, memory stores and schedules. `--prune` deletes removed agents. |
 | `hivemind publish AGENT -e ENV` | Publish to Microsoft 365 Copilot and Teams. |
 | `hivemind invoke AGENT MESSAGE -e ENV` | Talk to a deployed agent. |
-| `hivemind hub serve -e ENV` | Run the hub MCP server. |
+| `hivemind pause\|resume AGENT -e ENV` | Disable or enable an agent in Foundry. |
+| `hivemind identities -e ENV` | Agents' Entra principal ids, for RBAC on downstream resources. |
+| `hivemind sharepoint provision -e ENV` | Create or update the rules and outputs libraries and the task list. |
+| `hivemind tasks list\|show\|add\|run -e ENV` | Work with the task queue. |
+| `hivemind hub serve -e ENV` | Run the hub MCP server and task runner. |
 
 ## Status
 
-v0.1, a working foundation. The compiler, policies, planner, local provider and hub are covered by tests. The
-Foundry provider targets `azure-ai-projects` 2.8 and has been checked against the SDK's request serialisation,
-but has not yet been run against a live project. Several Foundry features it uses (memory, SharePoint and Fabric
+v0.2, a working foundation. The compiler, policies, planner, local provider, hub, task queue, authentication and
+SharePoint layer are covered by tests, including a SharePoint task store against an emulated Graph API. The
+Foundry provider targets `azure-ai-projects` 2.8 and has been checked against the SDK's request serialisation.
+Neither Foundry nor SharePoint has been exercised against a live tenant yet. Several Foundry features it uses (memory, SharePoint and Fabric
 tools, routines, M365 publishing) are in preview. See [docs/roadmap.md](docs/roadmap.md).

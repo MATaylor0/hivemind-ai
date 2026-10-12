@@ -8,6 +8,7 @@ team: finance
 owner: financial.controller@contoso.com
 reports_to: chief-of-staff
 reviewed_by: compliance-reviewer
+goals: [fast-close, working-capital]
 instructions:
   - file: instructions/agents/finance-manager.md
 tools: [fabric-finance-warehouse]

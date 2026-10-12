@@ -57,6 +57,25 @@ def check_org(org: Org) -> list[Finding]:
     if cfg.hub.enabled and org.env_name and org.env.provider == "foundry" and not (org.env.hub_url or cfg.hub.url):
         error("hivemind.yaml", f"hub is enabled but no hub URL is set for environment '{org.env_name}'")
 
+    for goal_id, goal in cfg.goals.items():
+        if goal.parent and goal.parent not in cfg.goals:
+            error(f"goal:{goal_id}", f"parent '{goal.parent}' is not a defined goal")
+        seen, current = {goal_id}, goal.parent
+        while current in cfg.goals:
+            if current in seen:
+                error(f"goal:{goal_id}", "goal hierarchy has a cycle")
+                break
+            seen.add(current)
+            current = cfg.goals[current].parent
+
+    if cfg.hub.enabled and cfg.hub.tasks.backend == "sharepoint" and cfg.sharepoint is None:
+        error("hivemind.yaml", "hub.tasks.backend is 'sharepoint' but there is no 'sharepoint' section")
+    if cfg.hub.enabled and cfg.hub.auth == "entra" and org.env_name and org.env.provider == "foundry":
+        if not cfg.hub.audience:
+            error("hivemind.yaml", "hub.auth is 'entra' but hub.audience is not set")
+        if not cfg.hub.connection:
+            error("hivemind.yaml", "hub.auth is 'entra' but hub.connection (an agentic identity connection) is not set")
+
     for cycle in chart.find_cycles():
         error("org chart", f"reporting cycle: {' -> '.join(cycle)}")
 
@@ -93,6 +112,10 @@ def check_org(org: Org) -> list[Finding]:
             warn(subject, "worker-tier agent has direct reports; consider a manager role")
         if chart.depth(name) > policies.max_hierarchy_depth:
             error(subject, f"hierarchy depth {chart.depth(name)} exceeds max {policies.max_hierarchy_depth}")
+
+        for goal_id in agent.goals:
+            if goal_id not in cfg.goals:
+                error(subject, f"unknown goal '{goal_id}'")
 
         if policies.require_owner and not agent.owner:
             error(subject, "owner is required (an accountable human)")

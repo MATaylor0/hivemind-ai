@@ -28,6 +28,7 @@ from .loader import LoadError, Org, load_org
 from .planner import apply_plan, make_plan
 from .policy import check_org, has_errors
 from .reporting import budget_summary, inventory, org_chart, render_inventory, tiers
+from .workspace import workspace_for
 
 
 def _git_sha(root: Path) -> str | None:
@@ -63,7 +64,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     if not has_errors(findings):
         # Compile everything too, so missing instruction files and specs are caught in CI.
         try:
-            compile_org(org, SourceResolver(org.root, offline=True))
+            compile_org(org, SourceResolver(org.root, offline=True, workspace=workspace_for(org)))
         except Exception as exc:  # noqa: BLE001 - report any compile failure
             print(f"ERROR   compile: {exc}")
             return 1
@@ -90,7 +91,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     if args.agent not in org.agents:
         print(f"unknown agent '{args.agent}'", file=sys.stderr)
         return 1
-    build = compile_agent(org, args.agent, SourceResolver(org.root, offline=args.offline))
+    build = compile_agent(org, args.agent, SourceResolver(org.root, offline=args.offline, workspace=workspace_for(org)))
     if args.json:
         print(
             json.dumps(
@@ -132,7 +133,7 @@ def cmd_plan(args: argparse.Namespace, apply: bool = False) -> int:
     from .providers import provider_for
 
     org = _validated(args)
-    builds = compile_org(org, SourceResolver(org.root), git_sha=_git_sha(org.root))
+    builds = compile_org(org, SourceResolver(org.root, workspace=workspace_for(org)), git_sha=_git_sha(org.root))
     provider = provider_for(org)
     plan = make_plan(builds, provider.list_managed())
     print(f"Environment: {org.env_name} ({org.env.provider})\n")
@@ -224,6 +225,106 @@ def cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pause(args: argparse.Namespace, enabled: bool) -> int:
+    from .providers import provider_for
+
+    org = _load(args)
+    if args.agent not in org.agents:
+        print(f"unknown agent '{args.agent}'", file=sys.stderr)
+        return 1
+    provider_for(org).set_enabled(foundry_name(org, args.agent), enabled)
+    print(f"{'resumed' if enabled else 'paused'} {foundry_name(org, args.agent)} in {org.env_name}")
+    return 0
+
+
+def cmd_identities(args: argparse.Namespace) -> int:
+    """Agent identities, for granting published agents access to downstream resources (RBAC)."""
+    from .providers import provider_for
+
+    org = _load(args)
+    deployed = provider_for(org).list_managed()
+    shared: dict[str, int] = {}
+    for agent in deployed.values():
+        if agent.principal_id:
+            shared[agent.principal_id] = shared.get(agent.principal_id, 0) + 1
+    for name, agent in sorted(deployed.items()):
+        kind = "shared project identity" if shared.get(agent.principal_id or "", 0) > 1 else "own identity"
+        print(f"{name:32} {agent.principal_id or '-':38} {kind if agent.principal_id else 'unknown'}")
+    return 0
+
+
+def cmd_sharepoint_provision(args: argparse.Namespace) -> int:
+    from .sharepoint import provision
+
+    provision(_validated(args))
+    return 0
+
+
+def _task_store(org: Org):
+    from .tasks import task_store_for
+
+    return task_store_for(org)
+
+
+def cmd_tasks_list(args: argparse.Namespace) -> int:
+    org = _load(args)
+    tasks = _task_store(org).query(status=args.status, assigned_to=args.agent, limit=args.limit)
+    if args.json:
+        print(json.dumps([t.to_dict() for t in tasks], indent=2))
+        return 0
+    for t in tasks:
+        parent = f" <- {t.parent_id}" if t.parent_id else ""
+        print(f"{t.id:8} {t.status:10} {t.assigned_to:22} {t.kind:10} {t.title[:60]}{parent}")
+    print(f"\n{len(tasks)} task(s)")
+    return 0
+
+
+def cmd_tasks_show(args: argparse.Namespace) -> int:
+    task = _task_store(_load(args)).get(args.task_id)
+    if task is None:
+        print(f"task '{args.task_id}' not found", file=sys.stderr)
+        return 1
+    print(json.dumps(task.to_dict(), indent=2))
+    return 0
+
+
+def cmd_tasks_add(args: argparse.Namespace) -> int:
+    from .tasks import Task
+
+    org = _load(args)
+    if args.agent not in org.active_agents():
+        print(f"unknown or inactive agent '{args.agent}'", file=sys.stderr)
+        return 1
+    if args.goal and args.goal not in org.config.goals:
+        print(f"unknown goal '{args.goal}'", file=sys.stderr)
+        return 1
+    task = _task_store(org).create(
+        Task(
+            title=args.title or args.instructions.splitlines()[0][:120],
+            instructions=args.instructions,
+            assigned_to=args.agent,
+            requested_by=args.requested_by or os.environ.get("USER", "cli"),
+            requester_kind="person",
+            goal=args.goal,
+            depth=0,
+        )
+    )
+    print(f"created {task.id} for {task.assigned_to}")
+    return 0
+
+
+def cmd_tasks_run(args: argparse.Namespace) -> int:
+    """Work the queue once, in this process (local environments and troubleshooting)."""
+    from .hub.server import build_service
+    from .hub.worker import TaskRunner
+
+    runner = TaskRunner(build_service(_validated(args)))
+    count = runner.run_pending()
+    delivered = runner.deliver_follow_ups()
+    print(f"ran {count} task(s), delivered {delivered} follow-up(s)")
+    return 0
+
+
 def cmd_hub_serve(args: argparse.Namespace) -> int:
     from .hub.server import serve
 
@@ -301,13 +402,54 @@ def build_parser() -> argparse.ArgumentParser:
     with_env(p, True)
     p.set_defaults(func=cmd_invoke)
 
+    for name, enabled in (("pause", False), ("resume", True)):
+        p = sub.add_parser(name, help=f"{name} an agent in the environment (Foundry enable/disable)")
+        p.add_argument("agent")
+        with_env(p, True)
+        p.set_defaults(func=lambda a, e=enabled: cmd_pause(a, e))
+
+    p = sub.add_parser("identities", help="list deployed agents' Entra identities (for RBAC)")
+    with_env(p, True)
+    p.set_defaults(func=cmd_identities)
+
+    sp = sub.add_parser("sharepoint", help="HiveMind SharePoint site")
+    sp_sub = sp.add_subparsers(dest="sharepoint_command", required=True)
+    p = sp_sub.add_parser("provision", help="create/update the rules and outputs libraries and the tasks list")
+    with_env(p, True)
+    p.set_defaults(func=cmd_sharepoint_provision)
+
+    tasks = sub.add_parser("tasks", help="the task queue")
+    tasks_sub = tasks.add_subparsers(dest="tasks_command", required=True)
+    p = tasks_sub.add_parser("list", help="list tasks")
+    with_env(p, True)
+    p.add_argument("--status", choices=["Queued", "InProgress", "Done", "Failed", "Cancelled"])
+    p.add_argument("--agent")
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_tasks_list)
+    p = tasks_sub.add_parser("show", help="show one task")
+    p.add_argument("task_id")
+    with_env(p, True)
+    p.set_defaults(func=cmd_tasks_show)
+    p = tasks_sub.add_parser("add", help="give an agent a task (as a person)")
+    p.add_argument("agent")
+    p.add_argument("instructions")
+    p.add_argument("--title")
+    p.add_argument("--goal")
+    p.add_argument("--requested-by")
+    with_env(p, True)
+    p.set_defaults(func=cmd_tasks_add)
+    p = tasks_sub.add_parser("run", help="work the queue once in this process")
+    with_env(p, True)
+    p.set_defaults(func=cmd_tasks_run)
+
     hub = sub.add_parser("hub", help="HiveMind hub")
     hub_sub = hub.add_subparsers(dest="hub_command", required=True)
     p = hub_sub.add_parser("serve", help="run the hub MCP server")
     with_env(p, True)
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
-    p.add_argument("--insecure", action="store_true", help="allow running without HIVEMIND_HUB_KEY (dev only)")
+    p.add_argument("--insecure", action="store_true", help="key auth without HIVEMIND_HUB_KEY (dev only)")
     p.set_defaults(func=cmd_hub_serve)
 
     return parser

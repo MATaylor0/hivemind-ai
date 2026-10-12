@@ -1,0 +1,51 @@
+# Business users change agent rules by editing Word documents on the HiveMind SharePoint site. This job picks up
+# approved changes: it plans every hour and applies only when something changed. Agents whose rules did not change
+# are untouched (content hash). For faster pickup, trigger this workflow from a Power Automate flow on the
+# "Agent Rules" library (When a file is created or modified -> GitHub: create a workflow dispatch event).
+name: Sync SharePoint rules
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      HIVEMIND_ORG: ${{ vars.HIVEMIND_ORG || 'examples/contoso' }}
+      FOUNDRY_ENDPOINT_PROD: ${{ vars.FOUNDRY_ENDPOINT_PROD }}
+      HIVEMIND_HUB_URL_PROD: ${{ vars.HIVEMIND_HUB_URL_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ".[azure]"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          hivemind plan -e prod --detailed-exitcode | tee -a "$GITHUB_STEP_SUMMARY"
+          code=${PIPESTATUS[0]}
+          [ "$code" = 1 ] && exit 1
+          echo "changed=$([ "$code" = 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Apply
+        if: steps.plan.outputs.changed == 'true'
+        run: hivemind apply -e prod --yes

@@ -20,7 +20,8 @@ flowchart LR
         Y[hivemind.yaml<br/>agents/ roles/ catalog/]
         MD[instructions/*.md]
     end
-    SP[(SharePoint<br/>business-owned instructions)]
+    SP[(HiveMind SharePoint site<br/>rules · outputs · task list)]
+    People([Business users]) --> SP
     subgraph CLI["hivemind CLI / CI"]
         L[loader + policy] --> C[compiler] --> P[planner]
     end
@@ -40,6 +41,7 @@ flowchart LR
     A1 -- MCP tool: delegate / escalate /<br/>review / remember / recall --> H
     H -- Responses API --> A1
     H --> MS
+    H <-- tasks, outputs --> SP
     A1 -- MCP / OpenAPI / IQ tools --> Sys[(Fabric, SharePoint,<br/>ERP, custom MCP)]
     M365[M365 Copilot / Teams] --> A1
 ```
@@ -52,7 +54,10 @@ flowchart LR
 | Policy | Governance rules that block or warn in CI | `policy.py` |
 | Planner | Diffs the content hash against deployed metadata, then creates new versions | `planner.py` |
 | Providers | `foundry` (azure-ai-projects) and `local` (JSON file, for tests and trials) | `providers/` |
-| Hub | MCP server granted to every agent, enforcing org-chart rules at runtime | `hub/` |
+| Hub | MCP server granted to every agent, enforcing org-chart rules at runtime | `hub/service.py`, `hub/server.py` |
+| Task queue | Delegations, escalations and reviews as tasks, in a SharePoint list | `tasks.py`, `hub/worker.py` |
+| Hub authentication | Entra agent identity tokens (production) or a shared key (development) | `hub/auth.py` |
+| SharePoint site | Business-owned rules (Word), agent outputs, the task list; provisioning | `workspace.py`, `sharepoint.py`, `graph.py`, `docx.py` |
 | Reporting | Inventory, budgets, org chart; KQL for usage and cost | `reporting.py`, `observability/` |
 
 ## What we use from Microsoft, and what we build
@@ -67,7 +72,8 @@ flowchart LR
 | Multi-agent | Foundry workflows and A2A | A hierarchy-aware hub: delegation limited to reports and collaborators, escalation, review, bounded depth |
 | Unattended runs | Foundry **routines** (cron triggers that invoke an agent) | Declared per agent as `schedules:` |
 | Teams and M365 Copilot | Foundry **publish to Microsoft 365** | Declared per agent as `channels.m365`; `hivemind publish` |
-| Identity | **Microsoft Entra Agent ID** (agent identities and blueprints) | Not yet; see the roadmap |
+| Identity | **Microsoft Entra Agent ID**: a shared project identity for unpublished agents, a dedicated identity per published agent, and agentic-identity connections for calling MCP servers | The hub verifies those tokens and maps identities to agents; `hivemind identities` lists them for RBAC |
+| Business-facing UI | **SharePoint**, Teams, Lists, M365 Copilot | A provisioned site: rules folders per org/role/team/agent, outputs library, task list with an agent drop-down |
 | Observability | Foundry **tracing** to Application Insights; Foundry evaluations | KQL for per-agent cost; hub audit log |
 | Fleet governance | Foundry **Control Plane**, Azure Policy, Cost Management, Agent 365 | Owners, budgets, cost centres and hierarchy as agent metadata, so these tools can slice by them; policy checks before deploy |
 | CI/CD auth | GitHub OIDC → Entra workload identity | Deploy workflow |
@@ -113,19 +119,66 @@ It loads the same org directory, so runtime permissions always match what the ag
 
 | Tool | Allowed |
 |---|---|
-| `delegate_task(to, task, context)` | `to` is a direct report or collaborator |
+| `delegate_task(to, task, context, parent_task, goal)` | `to` is a direct report or collaborator |
 | `escalate(issue, context)` | goes to `reports_to` |
 | `request_review(work, criteria)` | goes to `reviewed_by`; answer starts with APPROVED / CHANGES REQUIRED |
+| `check_task(id)` / `my_tasks()` | tasks you requested or were assigned |
+| `save_output(title, content)` | your own folder in the outputs library |
 | `remember(scope, content)` / `recall(scope, query)` | scope ACLs (below) |
 | `list_colleagues()` | everyone, with your relationship to each |
 
-Delegation runs the target agent through the Foundry Responses API and returns its answer. A depth limit
-(`hub.max_delegation_depth`) stops runaway chains, and every call is written as a JSON audit line.
+## Tasks: the queue between agents (and people)
+
+Delegation, escalation and review don't call the other agent directly. They create a **task**:
+
+```
+finance-manager ──delegate_task──► [Agent Tasks list]  T-41 Queued → ap-clerk
+                                         │
+                           hub task runner claims T-41 (ETag compare-and-set, 15-min lease)
+                                         │
+                                         ▼
+                      Foundry Responses API → ap-clerk → result recorded on T-41 (Done)
+                                         │
+             ┌───────────────────────────┴────────────────────────────┐
+   finance-manager was still waiting (≤ wait_seconds)       nobody waited
+   → gets the result as the tool's answer                   → follow-up task T-42 → finance-manager
+                                                              ("Result of T-41… continue T-40")
+```
+
+* **One assignee and one claim.** Claims are compare-and-set, so hub replicas never double-work a task. A worker
+  that dies leaves its lease to expire, and the task is retried up to `max_attempts`.
+* **Exactly-once delivery.** A result goes either to the waiting caller or, after a grace period, to a follow-up
+  task, never both.
+* **Traceability.** Each task records its `parent` (the task it serves), its `root` (the original request), its
+  `goal` (inherited down the chain) and its `depth`. Agents see the goal ancestry and parent in the task message.
+* **Runaway protection that survives restarts and replicas.** Depth is stored on the task (`max_delegation_depth`),
+  and the number of tasks per root request is capped (`max_tasks_per_request`).
+* **People use the same queue.** In the SharePoint list, people pick an agent from a drop-down, write
+  instructions and read the result. Human-created items become tasks with depth 0.
+* **Per-agent concurrency** (`max_concurrent_tasks`) per replica.
+
+The queue lives in a **SharePoint list** because that's where non-technical users already are. At high volume
+(thousands of tasks an hour), swap in a Service Bus or Cosmos DB backed `TaskStore`; the interface is five methods.
 
 **Why a hub instead of only Foundry workflows or A2A?** Workflows suit fixed processes, and A2A suits
 point-to-point calls. Neither knows your org chart, enforces "only your manager", or shares governed memory.
 The hub is the one piece of runtime HiveMind owns. It sits behind a standard MCP interface, so agents could
 later reach it through a Foundry toolbox or replace it with a native capability without changing their specs.
+
+## The SharePoint site
+
+`hivemind sharepoint provision` creates the business-facing side of HiveMind (see
+[business-users.md](business-users.md)):
+
+* **Agent Rules**: folders `Organisation/`, `Roles/<role>/`, `Teams/<team>/` and `Agents/<agent>/`. Word, .md and
+  .txt files are appended to the matching instruction layer at compile time, in file-name order, with Word
+  headings and lists converted to markdown. Files starting with `_` are ignored. Their content is part of the hash,
+  so an edit appears in `plan` and produces a new agent version. `.github/workflows/sync-rules.yml` applies
+  approved edits hourly. Turn on content approval in the library so only approved versions are used.
+* **Agent Outputs**: `save_output` writes Word documents to `<team>/<agent>/<yyyy-mm>/`.
+* **Agent Tasks**: the task queue, with an AssignedAgent drop-down of active agents (refreshed on each provision).
+
+The deploy identity needs `Sites.Selected` read on the site, and the hub's managed identity needs write.
 
 ## Memory model
 
@@ -151,11 +204,18 @@ project.
 
 * **Deploying** needs Entra-authenticated access to the Foundry project. CI uses OIDC; no secrets in the repo.
 * **Tool credentials** live in Foundry project connections (Key Vault). Specs only reference connection names.
-* **The hub** authenticates callers with a key held in a Foundry "custom keys" connection (`x-hivemind-key`) and
-  identifies the calling agent by the `x-hivemind-agent` header written into the agent definition at deploy time.
-  The model can't change that header; only someone who can edit agent definitions in the project can. Treat the
-  Foundry project as the trust boundary. Hardening, on the roadmap: validate per-agent Entra Agent ID tokens
-  instead of a shared key and header.
+* **Agent identity (Microsoft Entra Agent ID).** Foundry gives every project a shared agent identity, used by
+  unpublished agents, and each *published* agent its own identity. HiveMind uses these rather than inventing its own:
+  * The hub tool uses an **agentic-identity project connection**, so Foundry calls the hub with an Entra token
+    for the agent's identity. The hub validates it (issuer, audience, signature, tenant) and maps the principal id to
+    agents using Foundry's own agent records.
+  * **Published agent**: the token alone identifies it, and a mismatching `x-hivemind-agent` header is rejected.
+  * **Unpublished agents** share the project identity. The token proves "an agent of this project"; the header
+    (written at deploy time, not chosen by the model) names which one, and it can only name an agent that uses
+    that identity. Publish an agent to give it a fully distinct identity.
+  * Publishing changes an agent's identity, so its RBAC on downstream resources must be granted again.
+    `hivemind identities -e prod` lists each agent's principal id for those role assignments.
+  * `hub.auth: key` (shared key plus header) remains for local development.
 * **Write tools** must have a reviewer or MCP `require_approval` (enforced by policy). Approvals for
   `require_approval: always` tools surface to the human in Foundry, Teams and M365.
 * **Data boundaries**: tool and knowledge audiences stop an agent being granted data it shouldn't see. Runtime
@@ -168,5 +228,7 @@ project.
 * **More teams** should own their agent folders through CODEOWNERS. Org-level files stay with the platform team.
 * **More orgs or business units**: one org directory per Foundry project, or a shared catalog repo plus per-BU
   org directories.
-* **Hub**: stateless HTTP, so scale horizontally on Container Apps. Delegation depth is tracked per replica,
-  which is adequate for a guard; move it to a shared store if you need strict global limits.
+* **Hub**: stateless HTTP and a shared task store, so scale horizontally on Container Apps. Every replica runs a
+  task runner; claims are atomic. Per-agent concurrency limits are per replica.
+* **Task volume**: a SharePoint list comfortably handles the volume of business tasks (with indexed Status,
+  AssignedAgent and RootTask columns). Archive Done items periodically, or swap the `TaskStore` for Service Bus.

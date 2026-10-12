@@ -1,6 +1,7 @@
-# Deploys an org directory to a Foundry environment.
+# Deploys an org directory to a Foundry environment, then refreshes the HiveMind SharePoint site.
 # Authentication uses GitHub OIDC federated credentials - no secrets stored in the repo. The identity needs
-# the "Azure AI User" role (or higher) on the Foundry project, plus permission to read project connections.
+# the "Azure AI User" role (or higher) on the Foundry project, plus permission to read project connections, and
+# Sites.Selected (write) on the HiveMind SharePoint site.
 name: Deploy agents
 
 on:
@@ -57,3 +58,6 @@ jobs:
       - name: Apply
         if: ${{ inputs.apply }}
         run: hivemind --org "${{ inputs.org }}" apply -e "${{ inputs.environment }}" --yes
+      - name: Update SharePoint site (folders for new agents, task list drop-down)
+        if: ${{ inputs.apply }}
+        run: hivemind --org "${{ inputs.org }}" sharepoint provision -e "${{ inputs.environment }}"

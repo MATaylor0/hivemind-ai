@@ -7,6 +7,7 @@ role: worker
 team: people
 owner: people.ops@contoso.com
 reports_to: chief-of-staff
+goals: [employee-experience]
 instructions:
   - file: instructions/agents/policy-assistant.md
   - inline: If a question is about a specific person's pay, performance or health, do not answer; refer them to their People Partner.

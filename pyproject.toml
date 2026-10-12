@@ -25,6 +25,7 @@ azure = [
 hub = [
   "mcp>=2.2",
   "uvicorn>=0.30",
+  "PyJWT[crypto]>=2.8",
 ]
 dev = [
   "pytest>=8",

@@ -7,6 +7,7 @@ role: worker
 team: finance
 owner: fpa.lead@contoso.com
 reports_to: finance-manager
+goals: [fy27-margin]
 instructions:
   - file: instructions/agents/fpa-analyst.md
 tools: [fabric-finance-warehouse, fabric-sales-agent, code-interpreter]

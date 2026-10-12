@@ -83,7 +83,10 @@ class FoundryProvider(Provider):
         if metadata.get("managed_by") != MANAGED_BY:
             return None
         created = _get(latest, "created_at")
+        identity = _get(latest, "instance_identity") or _get(details, "instance_identity")
         return DeployedAgent(
+            principal_id=_get(identity, "principal_id"),
+            client_id=_get(identity, "client_id"),
             name=_get(details, "name"),
             version=str(_get(latest, "version", "")),
             content_hash=metadata.get("hm_hash", ""),
@@ -182,6 +185,10 @@ class FoundryProvider(Provider):
             full_description=description,
         )
         return f"published {name} to Microsoft 365 (scope={scope}, teams_app_id={_get(result, 'teams_app_id')})"
+
+    def set_enabled(self, name: str, enabled: bool) -> None:
+        """Pause or resume an agent in Foundry without deleting it (e.g. over budget, under investigation)."""
+        (self.client.agents.enable if enabled else self.client.agents.disable)(name)
 
     def invoke(self, name: str, message: str) -> str:
         openai = self.client.get_openai_client()

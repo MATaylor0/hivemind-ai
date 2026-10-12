@@ -27,6 +27,26 @@ teams:
   people:
     description: HR policy and employee questions.
 
+# What the organisation is trying to achieve. Agents and tasks link to goals so work carries its "why".
+goals:
+  fy27-margin:
+    title: Lift FY27 operating margin to 18%
+    owner: cfo@contoso.com
+  working-capital:
+    title: Pay suppliers accurately and on time, without paying early
+    parent: fy27-margin
+  fast-close:
+    title: Close the books within 3 business days
+    parent: fy27-margin
+  employee-experience:
+    title: Employees get clear policy answers in under a minute
+
+# The HiveMind SharePoint site: business-owned rules (Word documents), agent outputs and the task queue.
+# Create it with `hivemind sharepoint provision -e <env>`.
+sharepoint:
+  site: contoso.sharepoint.com/sites/HiveMind
+  output_format: docx
+
 # Shared organisational memory (enforced by the hub). `org` and `team:<team>` scopes are implicit.
 memory:
   store: hivemind-memory
@@ -40,8 +60,17 @@ memory:
 
 hub:
   enabled: true
-  connection: hivemind-hub          # Foundry "custom keys" connection holding x-hivemind-key
+  # Foundry connection using the agents' Microsoft Entra identity (agentic identity) to call the hub.
+  connection: hivemind-hub
+  auth: entra
+  audience: ${env:HIVEMIND_HUB_AUDIENCE:-api://hivemind-hub}
+  tenant_id: ${env:AZURE_TENANT_ID:-}
   max_delegation_depth: 4
+  tasks:
+    backend: sharepoint             # the "Agent Tasks" list on the HiveMind site
+    workers: 4
+    wait_seconds: 45
+    max_tasks_per_request: 30
 
 models:
   allowed: [gpt-5, gpt-5-mini, gpt-4.1]
@@ -59,6 +88,7 @@ policies:
 environments:
   local:
     provider: local
+    sharepoint_local_dir: sharepoint   # a folder standing in for the SharePoint site
     variables:
       FABRIC_MCP_URL: https://localhost/fabric-mcp
       ERP_MCP_URL: https://localhost/erp-mcp

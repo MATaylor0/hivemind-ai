@@ -183,8 +183,9 @@ def hub_tool(org: Org, agent: AgentSpec) -> dict[str, Any] | None:
         "server_url": url or "${HUB_URL_NOT_CONFIGURED}",
         "server_description": "HiveMind hub: delegation, escalation, review and shared organisational memory.",
         "require_approval": "never",
-        # Identifies the calling agent to the hub. Set by the deployer, not the model; the hub authenticates
-        # the caller with the connection's key (see docs/architecture.md, "Trust boundaries").
+        # Names the calling agent. Set by the deployer, not the model. With an agentic-identity connection the hub
+        # verifies the agent's Entra token: a published agent's own identity must match this name, and agents that
+        # share the project identity may only name themselves (see docs/architecture.md, "Trust boundaries").
         "headers": {HUB_AGENT_HEADER: agent.name},
     }
     if hub.connection:

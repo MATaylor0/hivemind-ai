@@ -18,6 +18,9 @@ class DeployedAgent:
     metadata: dict[str, str] = field(default_factory=dict)
     model: str | None = None
     created_at: str | None = None
+    # Microsoft Entra agent identity. Unpublished agents share the project's identity; published agents get their own.
+    principal_id: str | None = None
+    client_id: str | None = None
 
 
 class Provider(ABC):
@@ -46,3 +49,6 @@ class Provider(ABC):
 
     def invoke(self, name: str, message: str) -> str:
         raise NotImplementedError(f"{type(self).__name__} cannot invoke agents")
+
+    def set_enabled(self, name: str, enabled: bool) -> None:
+        raise NotImplementedError(f"{type(self).__name__} cannot pause or resume agents")

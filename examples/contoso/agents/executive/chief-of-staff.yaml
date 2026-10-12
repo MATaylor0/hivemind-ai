@@ -6,6 +6,7 @@ description: Front door for the leadership team. Triages requests, routes them t
 role: executive
 team: executive
 owner: coo@contoso.com
+goals: [fy27-margin]
 instructions:
   - file: instructions/agents/chief-of-staff.md
 tools: [fabric-sales-agent]

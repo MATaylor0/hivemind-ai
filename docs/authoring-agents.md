@@ -45,6 +45,13 @@ instructions:
 The document is fetched on every `plan` and `apply`. If it changed, the agent shows as changed and gets a new
 version. The deploy identity needs read access to the site (`Sites.Selected` is recommended).
 
+### Business rules on the HiveMind SharePoint site
+
+Every agent also gets a folder in the site's **Agent Rules** library (`Agents/<agent-name>`), plus shared folders
+for its team, role and the whole organisation. Business owners maintain the detail there in Word, without pull
+requests. Keep the repo instructions for the stable core of the job, and leave fast-changing specifics (exceptions,
+calendars, price lists) to the business. See [business-users.md](business-users.md).
+
 ## 3. Give it tools and knowledge
 
 ```yaml
@@ -107,7 +114,16 @@ channels:
 
 After `apply`, run `hivemind publish <agent> -e prod` to publish to Microsoft 365 Copilot and Teams.
 
-## 7. Ownership and budget
+## 7. Goals
+
+```yaml
+goals: [working-capital]   # ids from `goals:` in hivemind.yaml
+```
+
+The agent's instructions list the goals it serves (with their parent goals), and tasks it delegates carry the goal
+down the chain.
+
+## 8. Ownership and budget
 
 ```yaml
 owner: ap.lead@contoso.com
@@ -118,7 +134,7 @@ tags:
   process: procure-to-pay
 ```
 
-## 8. Ship
+## 9. Ship
 
 ```bash
 hivemind validate
