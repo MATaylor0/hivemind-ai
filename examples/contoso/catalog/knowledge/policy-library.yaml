@@ -1,0 +1,7 @@
+# The same library live from SharePoint, searched as the employee who is asking: answers respect their permissions
+# and see edits immediately. Only for agents people chat with (Teams / M365 Copilot).
+id: policy-library
+kind: sharepoint
+description: Live search of the SharePoint policy library, as the person asking (permission-trimmed).
+connection: ${var:SP_POLICIES_CONNECTION}
+audience: ["agent:policy-assistant", "tier:executive"]

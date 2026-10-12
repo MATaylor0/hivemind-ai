@@ -117,3 +117,20 @@ def test_hub_url_required_for_foundry_env(monkeypatch):
     assert not has_errors(check_org(org))  # default hub URL supplied via ${env:...:-default}
     org.config.environments["dev"].hub_url = None
     assert any("no hub URL" in f.message for f in errors(org))
+
+
+def test_user_context_tools_warn_for_unattended_or_unpublished_agents(org_dir):
+    path = org_dir / "agents" / "executive" / "chief-of-staff.yaml"
+    edit_yaml(path, schedules=[{"name": "daily", "cron": "0 7 * * 1-5", "input": "Morning briefing"}])
+    warnings = [f.message for f in check_org(load_org(org_dir)) if f.subject == "agent:chief-of-staff"]
+    assert any("no signed-in person during scheduled runs" in w for w in warnings)
+
+    edit_yaml(path, schedules=None, channels={"m365": {"enabled": False}})
+    warnings = [f.message for f in check_org(load_org(org_dir)) if f.subject == "agent:chief-of-staff"]
+    assert any("need a signed-in person" in w and "policy-library" in w for w in warnings)
+
+
+def test_sharepoint_knowledge_is_user_context_by_default():
+    org = load_org(EXAMPLE)
+    assert org.knowledge["policy-library"].as_tool().user_context
+    assert not org.knowledge["org-policies"].as_tool().user_context

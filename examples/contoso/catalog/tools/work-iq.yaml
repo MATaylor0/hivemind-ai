@@ -1,6 +1,8 @@
-# Microsoft 365 work context (mail, meetings, files, people) for the signed-in user.
+# Microsoft 365 work context (mail, meetings, chats, files) of the person talking to the agent - what M365 Copilot
+# uses. Runs on behalf of that person, who needs a Microsoft 365 Copilot licence.
 id: work-iq
 kind: work_iq
 description: Search the user's Microsoft 365 work context - mail, meetings, chats and files.
 connection: ${var:WORK_IQ_CONNECTION}
 audience: ["tier:executive", "tier:manager"]
+user_context: true

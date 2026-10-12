@@ -5,9 +5,8 @@
 - **First live deployment.** Run `apply` against a dev Foundry project and confirm each tool type end to end,
   especially the preview ones (memory, SharePoint, Fabric data agent, routines, M365 publish). Capture any API
   drift in `providers/foundry.py`, the only module that talks to Foundry.
-- **Hub infrastructure as code.** Bicep for Container Apps, the hub's managed identity and Entra app registration
-  (the token audience), the `hivemind-hub` agentic-identity connection, `Sites.Selected` grants on the HiveMind
-  site, and a Log Analytics workspace. Build and roll the hub image in the deploy workflow.
+- **First infrastructure deployment.** Run `infra/` in a dev subscription and confirm the preview pieces, especially
+  the agent-identity `hivemind-hub` connection (see infra/README.md, "Preview caveats").
 - **Evaluations as code.** A `tests:` block per agent (prompts plus expected behaviour) run through Foundry
   evaluations in CI, so behaviour regressions block a merge the same way policy errors do.
 - **Plan in pull requests.** A read-only identity that runs `plan -e prod` and comments the diff on the PR.
@@ -33,8 +32,8 @@
   compiles to a Foundry workflow agent, for cases where deterministic routing beats LLM delegation.
 - **Agent 365 / Control Plane integration.** Register HiveMind metadata so fleet views in the Microsoft admin
   surfaces show owner, team, tier and budget.
-- **Org-chart UI.** A read-only web view (inventory, org chart, recent hub activity, cost against budget) built
-  from `inventory --format json` and the KQL queries.
+- **Hosted console.** Run `hivemind ui` on Container Apps behind Entra sign-in for the platform team, with an audit
+  log of console commands; add hub activity and cost-against-budget views.
 - **Instruction snapshots.** Record the SharePoint item version (eTag) of each fetched source in agent metadata,
   for a full audit trail of business-edited content.
 

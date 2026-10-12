@@ -9,7 +9,8 @@ owner: coo@contoso.com
 goals: [fy27-margin]
 instructions:
   - file: instructions/agents/chief-of-staff.md
-tools: [fabric-sales-agent]
+tools: [fabric-sales-agent, work-iq-mail]
+knowledge: [policy-library]
 memory:
   private: true
   private_scope: user

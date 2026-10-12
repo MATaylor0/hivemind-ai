@@ -4,6 +4,7 @@ name: policy-assistant
 display_name: Policy Assistant
 description: Answers employees' questions about Contoso policies in Teams, citing the policy library.
 role: worker
+knowledge: [policy-library]   # live, permission-trimmed SharePoint search as the employee
 team: people
 owner: people.ops@contoso.com
 reports_to: chief-of-staff

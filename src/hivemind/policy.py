@@ -145,6 +145,20 @@ def check_org(org: Org) -> list[Finding]:
                     f"write tool '{ref}' needs a reviewer (reviewed_by) or require_approval: always",
                 )
 
+        user_tools = [ref for ref in effective_tool_ids(org, agent) if _user_context(org, ref)]
+        if user_tools and agent.schedules:
+            warn(
+                subject,
+                f"user-context tools ({', '.join(user_tools)}) have no signed-in person during scheduled runs; "
+                "they will only work when someone is chatting with the agent",
+            )
+        if user_tools and not agent.channels.m365.enabled:
+            warn(
+                subject,
+                f"user-context tools ({', '.join(user_tools)}) need a signed-in person; publish the agent to M365 "
+                "(channels.m365) or remove them",
+            )
+
         for scope in agent.memory.shared:
             definition = cfg.memory.scopes.get(scope)
             if definition is None:
@@ -172,6 +186,14 @@ def check_org(org: Org) -> list[Finding]:
                 error(subject, f"name with environment prefix '{prefixed}' exceeds 63 characters")
 
     return findings
+
+
+def _user_context(org: Org, ref: str) -> bool:
+    if ref in org.tools:
+        return org.tools[ref].user_context
+    if ref in org.knowledge:
+        return bool(org.knowledge[ref].as_tool().user_context)
+    return False
 
 
 def has_errors(findings: list[Finding]) -> bool:

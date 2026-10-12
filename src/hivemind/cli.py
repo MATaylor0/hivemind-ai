@@ -325,6 +325,15 @@ def cmd_tasks_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    from .ui.server import serve
+
+    org = _load(args, env=None)
+    env = args.env or next((n for n, e in org.config.environments.items() if e.provider == "local"), None)
+    serve(org.root, port=args.port, env=env, open_browser=not args.no_browser)
+    return 0
+
+
 def cmd_hub_serve(args: argparse.Namespace) -> int:
     from .hub.server import serve
 
@@ -442,6 +451,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = tasks_sub.add_parser("run", help="work the queue once in this process")
     with_env(p, True)
     p.set_defaults(func=cmd_tasks_run)
+
+    p = sub.add_parser("ui", help="open the local admin console (org views + a console for these commands)")
+    p.add_argument("-e", "--env", help="environment selected when the console opens (default: the local one)")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true")
+    p.set_defaults(func=cmd_ui)
 
     hub = sub.add_parser("hub", help="HiveMind hub")
     hub_sub = hub.add_subparsers(dest="hub_command", required=True)

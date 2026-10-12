@@ -22,7 +22,13 @@ def test_inheritance_order_org_role_team_agent(org):
         "erp-invoices",
         "fabric-finance-warehouse",
     ]
-    assert effective_tool_ids(org, org.agents["chief-of-staff"]) == ["org-policies", "work-iq", "fabric-sales-agent"]
+    assert effective_tool_ids(org, org.agents["chief-of-staff"]) == [
+        "org-policies",
+        "work-iq",
+        "policy-library",
+        "fabric-sales-agent",
+        "work-iq-mail",
+    ]
 
 
 def test_instruction_layers_are_composed_in_order(org):
@@ -51,11 +57,12 @@ def test_org_position_is_generated_from_hierarchy(org):
 
 
 def test_foundry_tool_shapes(org):
+    sharepoint = tools_by_type(compile_agent(org, "policy-assistant"))["sharepoint_grounding_preview"][0]
+    connections = sharepoint["sharepoint_grounding_preview"]["project_connections"]
+    assert connections == [{"project_connection_id": "sp-policies"}]
     tools = tools_by_type(compile_agent(org, "ap-clerk"))
-    assert tools["sharepoint_grounding_preview"][0]["sharepoint_grounding_preview"] == {
-        "project_connections": [{"project_connection_id": "sp-policies"}]
-    }
-    assert tools["azure_ai_search"][0]["azure_ai_search"]["indexes"][0]["index_name"] == "finance-handbook"
+    indexes = [t["azure_ai_search"]["indexes"][0]["index_name"] for t in tools["azure_ai_search"]]
+    assert indexes == ["policies", "finance-handbook"]
     erp = next(t for t in tools["mcp"] if t["server_label"] == "erp_invoices")
     assert erp["require_approval"] == {
         "always": {"tool_names": ["approve_for_payment"]},

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HiveMind Console</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2l12 7v14l-12 7-12-7V9z' fill='%233b5bdb'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><strong>HiveMind</strong><span id="org-name"></span></div>
+    <div class="spacer"></div>
+    <label class="env-picker"><span class="label-text">Environment</span>
+      <select id="env" aria-label="Environment"></select>
+    </label>
+    <button id="refresh" title="Reload from the org directory">Refresh</button>
+  </header>
+
+  <nav class="side" aria-label="Sections">
+    <a href="#/overview" data-view="overview">Overview</a>
+    <a href="#/chart" data-view="chart">Org chart</a>
+    <a href="#/agents" data-view="agents">Agents</a>
+    <a href="#/plan" data-view="plan">Plan</a>
+    <a href="#/tasks" data-view="tasks">Tasks</a>
+  </nav>
+
+  <main id="main" tabindex="-1"><p class="empty">Loading…</p></main>
+
+  <section class="console" id="console" aria-label="Console">
+    <div class="console-head">
+      <strong>Console</strong>
+      <span id="chips"></span>
+      <button id="console-clear" type="button">clear</button>
+      <button id="console-toggle" type="button" aria-expanded="true">hide</button>
+    </div>
+    <pre class="console-out" id="console-out" aria-live="polite"></pre>
+    <form class="console-in" id="console-form" autocomplete="off">
+      <label for="console-input">hivemind ›</label>
+      <input id="console-input" spellcheck="false" placeholder="validate · tree · plan -e local · tasks list -e local · --help">
+    </form>
+  </section>
+
+  <dialog id="confirm">
+    <p id="confirm-text"></p>
+    <div class="actions">
+      <button value="cancel" id="confirm-cancel">Cancel</button>
+      <button value="ok" class="primary" id="confirm-ok">Run</button>
+    </div>
+  </dialog>
+
+  <dialog id="task-dialog">
+    <form class="stack" id="task-form" method="dialog">
+      <strong>Give an agent a task</strong>
+      <label>Agent <select name="agent" required></select></label>
+      <label>Instructions <textarea name="instructions" rows="4" required></textarea></label>
+      <label>Goal (optional) <select name="goal"><option value="">—</option></select></label>
+      <div class="actions">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="ok" class="primary">Create task</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

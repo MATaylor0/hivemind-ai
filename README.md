@@ -25,7 +25,8 @@ agents built on **one** framework, with engineering-grade control:
 | Repeatable, reviewable, reversible | Specs live in git. `plan` shows the diff, `apply` creates a new immutable Foundry agent version. |
 | Part shared, part private knowledge | Instructions and knowledge are layered: **org → role → team → agent**. Knowledge sources have audiences. |
 | Business-owned instructions | A **HiveMind SharePoint site**: business users drop Word documents into an organisation, role, team or agent folder, and the agents follow them. Edits show up in `plan` and sync hourly. |
-| Any tool, including custom MCP | A tool catalog: MCP servers (Fabric, your own), OpenAPI, AI Search, SharePoint, Fabric data agents, Work IQ and more. |
+| Any tool, including custom MCP | A tool catalog: MCP servers (Fabric, your own), OpenAPI, AI Search, SharePoint, Fabric data agents, Work IQ and more. Copilot-style M365 capabilities come from Work IQ and its MCP servers: see [docs/m365-capabilities.md](docs/m365-capabilities.md). |
+| One place to run it | `hivemind ui`: a local console with the org chart, fleet, compiled prompts, plan, tasks and a built-in CLI. Production is read-only there. |
 | Agents that work as a team | A hierarchy (reports to, reviewed by, collaborates with) that drives instructions *and* enforced permissions. |
 | Work that can be tracked | Delegation, escalation and review become **tasks** in a SharePoint list, with goal ancestry, parent tasks, atomic claims, retries and follow-ups. People can assign tasks to agents in the same list. |
 | Outputs people can use | Agents save Word documents to an "Agent Outputs" library, filed by team and agent. |
@@ -46,6 +47,13 @@ we took from the open-source Paperclip project and the ones we didn't.
 pip install -e ".[azure,hub,dev]"
 
 cd examples/contoso
+hivemind ui                             # the admin console: overview, org chart, agents, plan, tasks + a CLI
+```
+
+Or from a terminal:
+
+```bash
+
 hivemind validate                       # schema, references, hierarchy, policies
 hivemind tree                           # the org chart (add --format mermaid for a diagram)
 hivemind render ap-clerk -e local       # the exact instructions + tools ap-clerk will get
@@ -60,7 +68,8 @@ hivemind tasks list -e local
 The local environment uses `examples/contoso/sharepoint/` as a stand-in for the SharePoint site. Look at
 `Agent Rules/Agents/ap-clerk/Supplier exceptions.docx`, then `hivemind render ap-clerk -e local`.
 
-Then deploy to Foundry for real:
+Then deploy to Foundry for real. Infrastructure (Foundry, the hub on Container Apps, identities) is Bicep in
+[infra/](infra/README.md). After that:
 
 ```bash
 export FOUNDRY_ENDPOINT_DEV="https://<resource>.services.ai.azure.com/api/projects/<project>"
@@ -105,7 +114,9 @@ src/hivemind/           the framework
   sharepoint.py         site provisioning
   graph.py, docx.py     minimal Microsoft Graph client; Word read/write
   reporting.py          inventory and budgets
+  ui/                   the local admin console (`hivemind ui`)
 examples/contoso/       a complete example organisation (with a local SharePoint stand-in)
+infra/                  Bicep for Foundry, monitoring, the hub and identities; setup scripts
 observability/          KQL for per-agent cost and hub activity
 deploy/                 hub container image
 .github/workflows/      CI (validate on every PR) and deploy (OIDC to Foundry)
@@ -131,11 +142,13 @@ docs/                   architecture, authoring guide, roadmap
 | `hivemind sharepoint provision -e ENV` | Create or update the rules and outputs libraries and the task list. |
 | `hivemind tasks list\|show\|add\|run -e ENV` | Work with the task queue. |
 | `hivemind hub serve -e ENV` | Run the hub MCP server and task runner. |
+| `hivemind ui [-e ENV]` | Local admin console in the browser, with a console for these commands. |
 
 ## Status
 
 v0.2, a working foundation. The compiler, policies, planner, local provider, hub, task queue, authentication and
 SharePoint layer are covered by tests, including a SharePoint task store against an emulated Graph API. The
 Foundry provider targets `azure-ai-projects` 2.8 and has been checked against the SDK's request serialisation.
-Neither Foundry nor SharePoint has been exercised against a live tenant yet. Several Foundry features it uses (memory, SharePoint and Fabric
+The Bicep templates build and lint cleanly. Neither Foundry nor SharePoint has been exercised against a live
+tenant yet. Start with [docs/administrator.md](docs/administrator.md). Several Foundry features it uses (memory, SharePoint and Fabric
 tools, routines, M365 publishing) are in preview. See [docs/roadmap.md](docs/roadmap.md).

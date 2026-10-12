@@ -1,0 +1,11 @@
+# Work IQ Mail MCP server (Agent 365 tooling servers, preview): draft, send and reply to mail as the user.
+# Every call needs the user's approval in chat. Take the server URL from the Agent 365 tooling catalog.
+id: work-iq-mail
+kind: mcp
+description: Draft, send and reply to email as the signed-in user (each action needs their approval).
+server_url: ${var:WORK_IQ_MAIL_URL}
+connection: work-iq-mail
+access: write
+require_approval: always
+user_context: true
+audience: ["tier:executive"]

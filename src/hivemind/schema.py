@@ -172,6 +172,11 @@ class ToolDef(_Model):
     access: Literal["read", "write"] = "read"
     audience: list[str] = Field(default_factory=lambda: ["*"])
     data_classification: str | None = None
+    user_context: bool = Field(
+        default=False,
+        description="The tool acts as the signed-in person (e.g. Work IQ: their mail, meetings, files). It only works "
+        "when a person is talking to the agent, and each person needs a Microsoft 365 Copilot licence.",
+    )
 
     # kind-specific settings. Values may use ${var:NAME} / ${env:NAME} substitution.
     server_url: str | None = None
@@ -229,6 +234,11 @@ class KnowledgeDef(_Model):
     top_k: int | None = None
     audience: list[str] = Field(default_factory=lambda: ["*"])
     data_classification: str | None = None
+    user_context: bool | None = Field(
+        default=None,
+        description="Searches as the signed-in person (permission-trimmed). Defaults to true for sharepoint and "
+        "work_iq, which Foundry runs on behalf of the user; index into Azure AI Search for unattended agents.",
+    )
 
     @field_validator("id")
     @classmethod
@@ -247,6 +257,7 @@ class KnowledgeDef(_Model):
             index_name=self.index_name,
             query_type=self.query_type,
             top_k=self.top_k,
+            user_context=self.user_context if self.user_context is not None else self.kind in ("sharepoint", "work_iq"),
         )
 
 
@@ -450,6 +461,10 @@ class Environment(_Model):
     same spec can point at dev and prod connections."""
 
     provider: Literal["foundry", "local"] = "foundry"
+    protected: bool = Field(
+        default=False,
+        description="Changes only through CI (pull request + approval). The admin console allows read-only commands.",
+    )
     endpoint: str | None = None
     name_prefix: str = ""
     variables: dict[str, str] = Field(default_factory=dict)

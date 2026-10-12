@@ -1,6 +1,10 @@
-# Company policy library in SharePoint, grounded for every agent.
+# The policy library, indexed into Azure AI Search so every agent - including unattended ones - can ground on it.
+# (Foundry's SharePoint tool searches as the signed-in user, so it can't serve scheduled runs; see policy-library.)
 id: org-policies
-kind: sharepoint
+kind: azure_ai_search
 description: Contoso policy library (code of conduct, delegations of authority, travel, procurement).
-connection: ${var:SP_POLICIES_CONNECTION}
+connection: ${var:POLICY_SEARCH_CONNECTION}
+index_name: policies
+query_type: vector_semantic_hybrid
+top_k: 5
 audience: ["*"]
