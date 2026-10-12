@@ -1,0 +1,23 @@
+apiVersion: hivemind/v1
+kind: Agent
+name: finance-manager
+display_name: Finance Manager
+description: Runs the finance team's agents - accounts payable and planning - and owns month-end close.
+role: manager
+team: finance
+owner: financial.controller@contoso.com
+reports_to: chief-of-staff
+reviewed_by: compliance-reviewer
+instructions:
+  - file: instructions/agents/finance-manager.md
+tools: [fabric-finance-warehouse]
+memory:
+  shared: [month-end-close]
+schedules:
+  - name: close-status
+    cron: "0 8 1-5 * 1-5"
+    time_zone: AUS Eastern Standard Time
+    input: Compile the month-end close status for the first five business days and record it in the month-end-close memory scope.
+budget:
+  monthly_usd: 250
+  cost_center: FIN-200

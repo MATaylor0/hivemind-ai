@@ -1,0 +1,18 @@
+apiVersion: hivemind/v1
+kind: Agent
+name: compliance-reviewer
+display_name: Compliance Reviewer
+description: Independently reviews payments and other consequential agent actions against policy and delegations of authority.
+role: reviewer
+team: risk
+owner: chief.risk.officer@contoso.com
+reports_to: chief-of-staff
+instructions:
+  - file: instructions/agents/compliance-reviewer.md
+tools: [fabric-finance-warehouse]
+knowledge: [finance-handbook]
+memory:
+  private: false
+budget:
+  monthly_usd: 150
+  cost_center: RISK-300

@@ -1,0 +1,7 @@
+id: executive
+tier: executive
+description: Sets direction, routes work across teams and reports to human leadership.
+model: gpt-5
+instructions:
+  - file: instructions/roles/executive.md
+tools: [work-iq]

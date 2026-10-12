@@ -1,0 +1,8 @@
+id: finance-handbook
+kind: azure_ai_search
+description: Finance procedures, chart of accounts and month-end checklists.
+connection: ${var:FINANCE_SEARCH_CONNECTION}
+index_name: finance-handbook
+query_type: vector_semantic_hybrid
+top_k: 5
+audience: ["team:finance", "team:risk"]

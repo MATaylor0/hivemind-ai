@@ -1,0 +1,93 @@
+# HiveMind organisation definition: the single source of truth for the agent fleet.
+apiVersion: hivemind/v1
+
+org:
+  name: Contoso
+  description: Contoso's digital workforce, run on Microsoft Foundry.
+
+# Inherited by every agent. The "constitution" and shared knowledge live here.
+defaults:
+  model: gpt-5-mini
+  instructions:
+    - file: instructions/org/constitution.md
+  knowledge:
+    - org-policies
+
+teams:
+  executive:
+    description: Leadership support and cross-team coordination.
+  finance:
+    description: Accounts payable, planning and month-end close.
+    instructions:
+      - file: instructions/teams/finance.md
+    knowledge:
+      - finance-handbook
+  risk:
+    description: Independent review of agent outputs and actions.
+  people:
+    description: HR policy and employee questions.
+
+# Shared organisational memory (enforced by the hub). `org` and `team:<team>` scopes are implicit.
+memory:
+  store: hivemind-memory
+  backend: foundry
+  embedding_model: text-embedding-3-small
+  scopes:
+    month-end-close:
+      description: Status, blockers and decisions for the current month-end close.
+      read: ["team:finance", "tier:executive", "team:risk"]
+      write: ["team:finance"]
+
+hub:
+  enabled: true
+  connection: hivemind-hub          # Foundry "custom keys" connection holding x-hivemind-key
+  max_delegation_depth: 4
+
+models:
+  allowed: [gpt-5, gpt-5-mini, gpt-4.1]
+  pricing:                          # USD per 1M tokens, used by observability/agent-cost.kql
+    gpt-5:      {input_per_1m: 1.25, output_per_1m: 10.0}
+    gpt-5-mini: {input_per_1m: 0.25, output_per_1m: 2.0}
+    gpt-4.1:    {input_per_1m: 2.0,  output_per_1m: 8.0}
+
+policies:
+  require_owner: true
+  require_budget: true
+  require_reviewer_for_write_tools: true
+  max_hierarchy_depth: 5
+
+environments:
+  local:
+    provider: local
+    variables:
+      FABRIC_MCP_URL: https://localhost/fabric-mcp
+      ERP_MCP_URL: https://localhost/erp-mcp
+      SP_POLICIES_CONNECTION: sp-policies
+      FINANCE_SEARCH_CONNECTION: finance-search
+      FABRIC_DATA_AGENT_CONNECTION: fabric-sales
+      WORK_IQ_CONNECTION: work-iq
+  dev:
+    provider: foundry
+    endpoint: ${env:FOUNDRY_ENDPOINT_DEV}
+    name_prefix: dev-
+    hub_url: ${env:HIVEMIND_HUB_URL_DEV:-https://hivemind-hub-dev.example.azurecontainerapps.io/mcp}
+    model_overrides:
+      gpt-5: gpt-5-mini             # keep dev cheap
+    variables:
+      FABRIC_MCP_URL: https://api.fabric.microsoft.com/v1/mcp/workspaces/dev-finance
+      ERP_MCP_URL: https://erp-mcp-dev.contoso.com/mcp
+      SP_POLICIES_CONNECTION: sp-policies-dev
+      FINANCE_SEARCH_CONNECTION: finance-search-dev
+      FABRIC_DATA_AGENT_CONNECTION: fabric-sales-dev
+      WORK_IQ_CONNECTION: work-iq
+  prod:
+    provider: foundry
+    endpoint: ${env:FOUNDRY_ENDPOINT_PROD}
+    hub_url: ${env:HIVEMIND_HUB_URL_PROD:-https://hivemind-hub.example.azurecontainerapps.io/mcp}
+    variables:
+      FABRIC_MCP_URL: https://api.fabric.microsoft.com/v1/mcp/workspaces/finance
+      ERP_MCP_URL: https://erp-mcp.contoso.com/mcp
+      SP_POLICIES_CONNECTION: sp-policies
+      FINANCE_SEARCH_CONNECTION: finance-search
+      FABRIC_DATA_AGENT_CONNECTION: fabric-sales
+      WORK_IQ_CONNECTION: work-iq

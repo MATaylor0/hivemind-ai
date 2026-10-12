@@ -1,0 +1,17 @@
+apiVersion: hivemind/v1
+kind: Agent
+name: fpa-analyst
+display_name: FP&A Analyst
+description: Answers questions about budgets, forecasts and variances, with numbers from Fabric and charts on request.
+role: worker
+team: finance
+owner: fpa.lead@contoso.com
+reports_to: finance-manager
+instructions:
+  - file: instructions/agents/fpa-analyst.md
+tools: [fabric-finance-warehouse, fabric-sales-agent, code-interpreter]
+memory:
+  shared: [month-end-close]
+budget:
+  monthly_usd: 200
+  cost_center: FIN-220

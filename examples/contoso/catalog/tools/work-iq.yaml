@@ -1,0 +1,6 @@
+# Microsoft 365 work context (mail, meetings, files, people) for the signed-in user.
+id: work-iq
+kind: work_iq
+description: Search the user's Microsoft 365 work context - mail, meetings, chats and files.
+connection: ${var:WORK_IQ_CONNECTION}
+audience: ["tier:executive", "tier:manager"]

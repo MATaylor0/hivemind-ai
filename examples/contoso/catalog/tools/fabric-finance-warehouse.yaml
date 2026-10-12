@@ -1,0 +1,9 @@
+# Read-only SQL over the Finance warehouse in Microsoft Fabric, via an MCP server.
+id: fabric-finance-warehouse
+kind: mcp
+description: Query the Finance data warehouse in Fabric (invoices, suppliers, GL, budgets). Read only.
+server_url: ${var:FABRIC_MCP_URL}
+connection: fabric-mcp
+access: read
+audience: ["team:finance", "team:risk", "tier:executive"]
+data_classification: confidential

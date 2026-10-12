@@ -1,0 +1,30 @@
+apiVersion: hivemind/v1
+kind: Agent
+name: ap-clerk
+display_name: Accounts Payable Clerk
+description: Processes supplier invoices - matches them to purchase orders, codes them and queues them for payment approval.
+role: worker
+team: finance
+owner: ap.lead@contoso.com
+reports_to: finance-manager
+reviewed_by: compliance-reviewer
+collaborates_with: [fpa-analyst]
+instructions:
+  - file: instructions/agents/ap-clerk.md
+  # Business-owned exceptions list, edited in SharePoint without a pull request:
+  # - sharepoint: {site: contoso.sharepoint.com/sites/Finance, path: "Agents/ap-clerk-exceptions.md"}
+tools: [erp-invoices, fabric-finance-warehouse]
+memory:
+  private: true
+  private_scope: agent
+  shared: [month-end-close]
+schedules:
+  - name: morning-invoice-sweep
+    cron: "30 7 * * 1-5"
+    time_zone: AUS Eastern Standard Time
+    input: Process all invoices received since the last sweep. Report what was coded, held and queued for approval.
+budget:
+  monthly_usd: 300
+  cost_center: FIN-210
+tags:
+  process: procure-to-pay

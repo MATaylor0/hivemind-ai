@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[azure,hub,dev]"
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+      - run: pytest -q
+      - name: Validate example org
+        run: hivemind --org examples/contoso validate --strict
+      - name: Org chart
+        run: |
+          {
+            echo '### HiveMind org chart'
+            echo '```mermaid'
+            hivemind --org examples/contoso tree --format mermaid
+            echo '```'
+            echo '### Fleet'
+            hivemind --org examples/contoso inventory --format markdown
+          } >> "$GITHUB_STEP_SUMMARY"

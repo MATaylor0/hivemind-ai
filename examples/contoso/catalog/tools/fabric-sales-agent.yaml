@@ -1,0 +1,6 @@
+# A Fabric data agent over the sales semantic model (natural language to DAX/SQL).
+id: fabric-sales-agent
+kind: fabric_data_agent
+description: Ask questions of the sales and revenue semantic model in Fabric.
+connection: ${var:FABRIC_DATA_AGENT_CONNECTION}
+audience: ["team:finance", "tier:executive"]

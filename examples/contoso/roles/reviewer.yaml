@@ -1,0 +1,7 @@
+id: reviewer
+tier: reviewer
+description: Independently checks other agents' work against policy before it takes effect.
+model: gpt-5
+temperature: 0.1
+instructions:
+  - file: instructions/roles/reviewer.md

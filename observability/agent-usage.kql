@@ -1,0 +1,25 @@
+// Token usage and estimated cost per HiveMind agent, from Foundry tracing in Application Insights.
+// Foundry emits OpenTelemetry GenAI spans; connect the project's Application Insights resource
+// (Foundry portal > Observability > Tracing). Attribute names follow the GenAI semantic conventions;
+// check one span in your workspace and adjust if your SDK version differs.
+//
+// Keep `pricing` in sync with `models.pricing` in hivemind.yaml (USD per 1M tokens).
+let pricing = datatable(model: string, input_per_1m: real, output_per_1m: real) [
+    "gpt-5",      1.25, 10.0,
+    "gpt-5-mini", 0.25,  2.0,
+    "gpt-4.1",    2.0,   8.0
+];
+dependencies
+| where timestamp > ago(30d)
+| extend agent  = tostring(customDimensions["gen_ai.agent.name"]),
+         model  = tostring(coalesce(customDimensions["gen_ai.response.model"], customDimensions["gen_ai.request.model"])),
+         input  = toreal(customDimensions["gen_ai.usage.input_tokens"]),
+         output = toreal(customDimensions["gen_ai.usage.output_tokens"])
+| where isnotempty(agent) and (input > 0 or output > 0)
+| lookup kind=leftouter pricing on model
+| summarize calls = count(),
+            input_tokens = sum(input),
+            output_tokens = sum(output),
+            est_cost_usd = round(sum(input / 1e6 * input_per_1m + output / 1e6 * output_per_1m), 2)
+    by agent, model
+| order by est_cost_usd desc

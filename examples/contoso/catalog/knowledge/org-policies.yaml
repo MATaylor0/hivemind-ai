@@ -1,0 +1,6 @@
+# Company policy library in SharePoint, grounded for every agent.
+id: org-policies
+kind: sharepoint
+description: Contoso policy library (code of conduct, delegations of authority, travel, procurement).
+connection: ${var:SP_POLICIES_CONNECTION}
+audience: ["*"]

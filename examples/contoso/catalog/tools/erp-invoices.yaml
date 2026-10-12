@@ -1,0 +1,13 @@
+# Custom MCP server in front of the ERP. Writes require human approval per call.
+id: erp-invoices
+kind: mcp
+description: Look up, code and approve supplier invoices in the ERP.
+server_url: ${var:ERP_MCP_URL}
+connection: erp-mcp
+access: write
+audience: ["agent:ap-clerk", "agent:finance-manager"]
+allowed_tools: [get_invoice, search_invoices, code_invoice, place_on_hold, approve_for_payment]
+require_approval:
+  always: [approve_for_payment]
+  never: [get_invoice, search_invoices, code_invoice, place_on_hold]
+data_classification: confidential

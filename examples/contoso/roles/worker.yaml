@@ -1,0 +1,5 @@
+id: worker
+tier: worker
+description: Does a specific job well, within clear limits, and asks for help when it should.
+instructions:
+  - file: instructions/roles/worker.md

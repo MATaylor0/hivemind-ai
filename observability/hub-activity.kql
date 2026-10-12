@@ -1,0 +1,11 @@
+// Agent-to-agent collaboration from the HiveMind hub's audit log (logger "hivemind.hub.audit").
+// The hub writes one JSON line per call; ship container logs to Log Analytics (Container Apps does this
+// by default) and parse them here. Adjust the table name for your hosting platform.
+ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(7d)
+| where Log_s has "hivemind.hub.audit"
+| extend payload = parse_json(extract(@"(\{.*\})", 1, Log_s))
+| extend caller = tostring(payload.caller), action = tostring(payload.action), target = tostring(payload.target),
+         scope = tostring(payload.scope)
+| summarize calls = count() by caller, action, target, scope
+| order by calls desc

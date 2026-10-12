@@ -1,0 +1,22 @@
+apiVersion: hivemind/v1
+kind: Agent
+name: chief-of-staff
+display_name: Chief of Staff
+description: Front door for the leadership team. Triages requests, routes them to the right team and returns one consolidated briefing.
+role: executive
+team: executive
+owner: coo@contoso.com
+instructions:
+  - file: instructions/agents/chief-of-staff.md
+tools: [fabric-sales-agent]
+memory:
+  private: true
+  private_scope: user
+channels:
+  m365:
+    enabled: true
+    scope: shared
+    short_description: Leadership briefings across Finance, Risk and People.
+budget:
+  monthly_usd: 400
+  cost_center: EXEC-100
