@@ -1,5 +1,5 @@
-// Log Analytics + workspace-based Application Insights. Foundry traces agent runs here; the hub's container logs
-// (including its JSON audit lines) land in the same workspace.
+// Log Analytics + workspace-based Application Insights. Foundry traces agent runs here, including process hosts;
+// production trace evals and cost queries read from the same workspace.
 
 param location string
 param namePrefix string

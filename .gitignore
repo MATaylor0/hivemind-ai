@@ -8,4 +8,3 @@ build/
 .ruff_cache/
 .env
 .hivemind/
-**/sharepoint/Agent Outputs/

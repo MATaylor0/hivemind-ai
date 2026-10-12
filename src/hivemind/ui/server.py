@@ -1,7 +1,7 @@
 """``hivemind ui``: a local admin console for the person running HiveMind.
 
 * Serves on 127.0.0.1 only, behind a per-session token (like Jupyter) and a Host-header check.
-* Read views (overview, agents, org chart, plan, tasks) call the same code as the CLI.
+* Read views (overview, org chart, agents, autonomy, processes, plan) call the same code as the CLI.
 * The console runs ``hivemind`` sub-commands, never a shell. Commands that change something need a confirmation,
   and are refused against ``protected`` environments: production changes go through a pull request and the
   approval-gated deploy workflow. ``plan`` and other read-only commands work everywhere.
@@ -35,11 +35,11 @@ STATIC_FILES = {
     "/static/app.css": ("app.css", "text/css; charset=utf-8"),
 }
 
-# Top-level commands the console may run. `hub serve` is long-running and belongs in a terminal or container.
-READ_ONLY = {"validate", "tree", "render", "inventory", "budget", "plan", "identities"}
+# Top-level commands the console may run.
+READ_ONLY = {"validate", "tree", "render", "inventory", "budget", "plan", "identities", "build", "gate"}
 CHANGES = {"apply", "publish", "invoke", "pause", "resume", "new"}
-READ_ONLY_SUB = {("tasks", "list"), ("tasks", "show")}
-CHANGES_SUB = {("tasks", "add"), ("tasks", "run"), ("sharepoint", "provision")}
+READ_ONLY_SUB = {("process", "list")}
+CHANGES_SUB = {("process", "run"), ("evals", "add"), ("sharepoint", "provision")}
 
 
 @dataclass
@@ -81,16 +81,10 @@ def check_command(line: str, protected_envs: set[str]) -> CommandCheck:
         changes = False
     elif top in CHANGES or pair in CHANGES_SUB:
         changes = True
-    elif top in ("tasks", "sharepoint") and (len(args) == 1 or args[1] in ("-h", "--help")):
+    elif top in ("process", "evals", "sharepoint") and (len(args) == 1 or args[1] in ("-h", "--help")):
         changes = False
-    elif top == "hub":
-        return CommandCheck(
-            args,
-            False,
-            None,
-            error="`hub serve` is a long-running server; run it in a terminal or "
-            "deploy it to Container Apps (see infra/)",
-        )
+    elif top == "ui":
+        return CommandCheck(args, False, None, error="the console is already running")
     else:
         return CommandCheck(args, False, None, error=f"'{top}' is not a hivemind command the console can run")
 
@@ -101,7 +95,7 @@ def check_command(line: str, protected_envs: set[str]) -> CommandCheck:
             True,
             env,
             error=f"'{env}' is a protected environment: changes go through a pull request and the 'Deploy agents' "
-            f"workflow. Read-only commands (plan, inventory, tasks list...) are fine.",
+            f"workflow. Read-only commands (plan, inventory, gate, build...) are fine.",
         )
     if top == "apply" and "--yes" not in args and "-y" not in args:
         args = [*args, "--yes"]  # the console has no stdin; the confirmation dialog replaces the prompt
@@ -217,11 +211,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json({"error": "choose an environment"})
             else:
                 self._json(data.plan(org_dir, env))
-        elif route == "tasks":
-            if not env:
-                self._json({"error": "choose an environment"})
-            else:
-                self._json(data.tasks(org_dir, env))
+        elif route == "autonomy":
+            self._json(data.autonomy(org_dir, env))
+        elif route == "processes":
+            self._json(data.processes(org_dir, env))
         elif route == "session":
             self._json({"default_env": self.server.default_env, "org_dir": str(org_dir)})
         else:

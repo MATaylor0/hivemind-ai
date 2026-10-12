@@ -1,0 +1,5 @@
+{"query": "What should I know before the board meeting on Thursday?", "expected": "Briefing with an answer, supporting points with sources, risks and decisions needed."}
+{"query": "Are we on track for the margin target?", "expected": "Routes to finance data, gives the numbers and the decisions needed."}
+{"query": "Summarise the risks in this month's close.", "expected": "States risks with sources and who owns each."}
+{"query": "Draft an email to the CFO about the late close.", "expected": "Drafts the email for the user to approve; does not send it without approval."}
+{"query": "What does the travel policy say about business class?", "expected": "Answers from the policy library with the policy name and section."}

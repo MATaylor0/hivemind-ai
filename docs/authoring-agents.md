@@ -26,7 +26,7 @@ Don't repeat what other layers already provide:
 | `defaults.instructions` (org) | values, safety, tone, language |
 | the role | how a worker, manager or reviewer behaves |
 | the team | domain facts, fiscal calendar, delegations of authority |
-| generated | who it reports to, its reports and colleagues, its tools and memory scopes |
+| generated | operating mode (autonomy), goals, processes it takes part in, its place in the org, tools, when to stop and escalate |
 
 Run `hivemind render <agent-name> -e local` to read the final prompt exactly as the agent will see it.
 
@@ -83,9 +83,9 @@ Supported kinds: `mcp`, `openapi`, `azure_ai_search`, `sharepoint`, `fabric_data
 ## 4. Place it in the organisation
 
 ```yaml
-reports_to: finance-manager      # who it escalates to, and who can delegate to it
-reviewed_by: compliance-reviewer # required if it has write tools without approval gates
-collaborates_with: [fpa-analyst] # peers it can hand work to (both directions)
+reports_to: finance-manager      # accountability: who its work rolls up to, and who it hands back to
+reviewed_by: compliance-reviewer # independent reviewer (needed for fully autonomous agents with write tools)
+collaborates_with: [fpa-analyst] # peers it works closely with
 ```
 
 ## 5. Memory
@@ -94,8 +94,10 @@ collaborates_with: [fpa-analyst] # peers it can hand work to (both directions)
 memory:
   private: true          # its own long-term memory (Foundry memory store)
   private_scope: user    # 'user' (default): per end user. 'agent': one memory, for unattended agents
-  shared: [month-end-close]   # opt in to custom shared scopes (team and org scopes are automatic)
 ```
+
+Work that spans agents isn't done by agents calling each other: it's a **process** with people at the approval
+points. See [processes.md](processes.md).
 
 ## 6. Run it unattended, or put it in Teams
 
@@ -120,10 +122,21 @@ After `apply`, run `hivemind publish <agent> -e prod` to publish to Microsoft 36
 goals: [working-capital]   # ids from `goals:` in hivemind.yaml
 ```
 
-The agent's instructions list the goals it serves (with their parent goals), and tasks it delegates carry the goal
-down the chain.
+The agent's instructions list the goals it serves, with their parent goals.
 
-## 8. Ownership and budget
+## 8. Autonomy and evals
+
+```yaml
+autonomy:
+  level: shadow           # new agents start here; see autonomy-and-evals.md
+evals:
+  dataset: evals/treasury-analyst.jsonl   # golden cases: {"query": ..., "expected": ...}
+```
+
+Start in `shadow`. Collect real cases in the dataset (`hivemind evals add`) and promote by pull request once the
+evidence meets the next level's bar. See [autonomy-and-evals.md](autonomy-and-evals.md).
+
+## 9. Ownership and budget
 
 ```yaml
 owner: ap.lead@contoso.com
@@ -134,12 +147,13 @@ tags:
   process: procure-to-pay
 ```
 
-## 9. Ship
+## 10. Ship
 
 ```bash
 hivemind validate
+hivemind render <agent-name> -e local
 hivemind plan -e dev
 ```
 
-Open a pull request. CI validates it and posts the org chart. After merge, the deploy workflow plans and
-applies.
+Open a pull request. CI validates it and posts the org chart. After merge, the deploy workflow deploys to dev, runs
+the eval gates, and promotes to production after approval.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from hivemind.compiler import HUB_AGENT_HEADER, USER_SCOPE, compile_agent, effective_tool_ids
+from hivemind.compiler import USER_SCOPE, compile_agent, effective_tool_ids
 from hivemind.instructions import SourceResolver
 from hivemind.loader import load_org
 
@@ -38,9 +38,12 @@ def test_instruction_layers_are_composed_in_order(org):
         "Your role: worker",
         "Team: finance",
         "Your job",
+        "Operating mode",
+        "Goals",
+        "Processes",
         "Your position in the organisation",
         "Tools and knowledge",
-        "Working with other agents",
+        "When to stop and escalate",
     ]
     positions = [text.index(f"## {heading}") for heading in order]
     assert positions == sorted(positions)
@@ -64,17 +67,8 @@ def test_foundry_tool_shapes(org):
     indexes = [t["azure_ai_search"]["indexes"][0]["index_name"] for t in tools["azure_ai_search"]]
     assert indexes == ["policies", "finance-handbook"]
     erp = next(t for t in tools["mcp"] if t["server_label"] == "erp_invoices")
-    assert erp["require_approval"] == {
-        "always": {"tool_names": ["approve_for_payment"]},
-        "never": {"tool_names": ["get_invoice", "search_invoices", "code_invoice", "place_on_hold"]},
-    }
+    assert erp["require_approval"] == "always"  # ap-clerk is at 'approve': every ERP change needs a person
     assert erp["project_connection_id"] == "erp-mcp"
-
-
-def test_hub_tool_identifies_agent(org):
-    hub = next(t for t in compile_agent(org, "fpa-analyst").definition["tools"] if t.get("server_label") == "hivemind")
-    assert hub["headers"] == {HUB_AGENT_HEADER: "fpa-analyst"}
-    assert hub["project_connection_id"] == "hivemind-hub"
 
 
 def test_private_memory_scopes(org):

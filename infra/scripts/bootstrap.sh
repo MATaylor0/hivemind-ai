@@ -38,5 +38,5 @@ Done. In GitHub (Settings > Environments > $ENV_NAME > Variables) set:
   AZURE_TENANT_ID         = $(az account show --query tenantId -o tsv)
   AZURE_SUBSCRIPTION_ID   = $(az account show --query id -o tsv)
   HIVEMIND_RESOURCE_GROUP = $RG
-Next: ./entra-setup.sh app $ENV_NAME
+Next: run the Infrastructure workflow for $ENV_NAME (deploy).
 OUT

@@ -1,14 +1,8 @@
-"""Provision the HiveMind SharePoint site so non-technical people can shape and follow the agents.
+"""Provision the HiveMind SharePoint site so non-technical people can shape the agents' rules.
 
-Creates (idempotently):
-
-* **Agent Rules** library - a folder for the organisation, each role, team and agent, each with a short
-  "_How to use this folder" Word document. Documents dropped in a folder become part of those agents' rules.
-* **Agent Outputs** library - a folder per team and agent for the documents agents save.
-* **Agent Tasks** list - the task queue. People can add a task for an agent (pick it from the AssignedAgent
-  drop-down), and follow status and results.
-
-Run it after adding agents so the folders and the agent drop-down stay current.
+Creates (idempotently) the **Agent Rules** library with a folder for the organisation, each role, team and agent,
+each holding a short "_How to use this folder" Word document. Documents dropped in a folder become part of those
+agents' instructions at the next deployment. Run it after adding agents so every agent has its folder.
 """
 
 from __future__ import annotations
@@ -19,7 +13,6 @@ from pathlib import Path
 from .docx import markdown_to_docx
 from .graph import GraphClient, GraphError
 from .loader import Org
-from .tasks import COLUMNS
 
 GUIDE_NAME = "_How to use this folder.docx"  # leading underscore: never read as a rule
 
@@ -40,10 +33,6 @@ def rule_folder_guides(org: Org) -> dict[str, str]:
     for name, agent in sorted(org.agents.items()):
         guides[f"Agents/{name}"] = common.format(who=f"{agent.title} ({agent.description.strip()})")
     return guides
-
-
-def output_folders(org: Org) -> list[str]:
-    return sorted({f"{a.team or 'general'}/{a.name}" for a in org.agents.values()})
 
 
 def provision(org: Org, log: Callable[[str], None] = print, graph: GraphClient | None = None) -> None:
@@ -69,8 +58,6 @@ def _provision_local(org: Org, root: Path, log: Callable[[str], None]) -> None:
         guide = folder / GUIDE_NAME
         if not guide.exists():
             guide.write_bytes(_guide_doc(path, text))
-    for path in output_folders(org):
-        (root / cfg.outputs_library / path).mkdir(parents=True, exist_ok=True)
     log(f"provisioned local SharePoint stand-in at {root}")
 
 
@@ -80,12 +67,10 @@ def _provision_graph(org: Org, graph: GraphClient, site: str, log: Callable[[str
     site_id = graph.site_id(site)
     existing = {lst["displayName"]: lst for lst in graph.request("GET", f"/sites/{site_id}/lists").get("value", [])}
 
-    for library in (cfg.rules_library, cfg.outputs_library):
-        if library not in existing:
-            graph.request(
-                "POST", f"/sites/{site_id}/lists", {"displayName": library, "list": {"template": "documentLibrary"}}
-            )
-            log(f"created library '{library}'")
+    if cfg.rules_library not in existing:
+        body = {"displayName": cfg.rules_library, "list": {"template": "documentLibrary"}}
+        graph.request("POST", f"/sites/{site_id}/lists", body)
+        log(f"created library '{cfg.rules_library}'")
 
     rules_drive = graph.drive_id(site, cfg.rules_library)
     for path, text in rule_folder_guides(org).items():
@@ -97,35 +82,3 @@ def _provision_graph(org: Org, graph: GraphClient, site: str, log: Callable[[str
                 raise
             graph.upload(rules_drive, f"{path}/{GUIDE_NAME}", _guide_doc(path, text))
     log(f"rules folders ready in '{cfg.rules_library}' ({len(rule_folder_guides(org))} folders)")
-
-    outputs_drive = graph.drive_id(site, cfg.outputs_library)
-    for path in output_folders(org):
-        graph.ensure_folder(outputs_drive, path)
-    log(f"output folders ready in '{cfg.outputs_library}'")
-
-    agents = sorted(org.active_agents())
-    columns = {name: dict(definition) for name, (_, definition) in COLUMNS.items()}
-    # People pick the agent from a drop-down of active agents.
-    columns["AssignedAgent"] = {"choice": {"choices": agents}, "indexed": True}
-    if cfg.tasks_list not in existing:
-        graph.request(
-            "POST",
-            f"/sites/{site_id}/lists",
-            {
-                "displayName": cfg.tasks_list,
-                "list": {"template": "genericList"},
-                "columns": [{"name": name, **definition} for name, definition in columns.items()],
-            },
-        )
-        log(f"created list '{cfg.tasks_list}'")
-        return
-    list_id = existing[cfg.tasks_list]["id"]
-    current = {c["name"]: c for c in graph.request("GET", f"/sites/{site_id}/lists/{list_id}/columns")["value"]}
-    for name, definition in columns.items():
-        if name not in current:
-            graph.request("POST", f"/sites/{site_id}/lists/{list_id}/columns", {"name": name, **definition})
-            log(f"added column '{name}' to '{cfg.tasks_list}'")
-    if "AssignedAgent" in current:
-        column_id = current["AssignedAgent"]["id"]
-        graph.request("PATCH", f"/sites/{site_id}/lists/{list_id}/columns/{column_id}", {"choice": {"choices": agents}})
-    log(f"'{cfg.tasks_list}' agent drop-down: {', '.join(agents)}")

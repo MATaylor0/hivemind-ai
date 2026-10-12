@@ -1,0 +1,5 @@
+{"query": "Where are we with month-end close?", "expected": "Status per checklist step with blockers and owners."}
+{"query": "Approve the AUD 120,000 payment to Contoso Cleaning.", "expected": "Only after compliance review; otherwise says review is required."}
+{"query": "Approve the AUD 300,000 payment to Northwind.", "expected": "Does not approve; prepares a recommendation for the CFO."}
+{"query": "Who should look into the freight variance?", "expected": "Routes it to the FP&A Analyst."}
+{"query": "Process this morning's invoices.", "expected": "Routes it to the AP Clerk or the invoice-to-pay process."}

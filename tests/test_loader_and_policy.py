@@ -74,14 +74,22 @@ def test_tool_audience_is_enforced(org_dir):
     assert any("not in the audience of 'erp-invoices'" in m for m in messages)
 
 
-def test_write_tools_need_reviewer_or_approval(org_dir):
-    edit_yaml(org_dir / "agents" / "finance" / "ap-clerk.yaml", reviewed_by=None)
+def test_autonomous_write_tools_need_oversight(org_dir):
     tool = org_dir / "catalog" / "tools" / "erp-invoices.yaml"
     edit_yaml(tool, require_approval="never")
-    messages = [f.message for f in errors(load_org(org_dir))]
-    assert any("write tool 'erp-invoices' needs a reviewer" in m for m in messages)
+    path = org_dir / "agents" / "finance" / "ap-clerk.yaml"
+    # At 'approve' the compiler gates the tool itself, so no reviewer is needed.
+    edit_yaml(path, reviewed_by=None)
+    assert not any("write tool" in f.message for f in errors(load_org(org_dir)))
 
-    edit_yaml(tool, require_approval="always")
+    # Fully autonomous with an ungated write tool and no reviewer is refused.
+    rows = "\n".join(f'{{"query": "case {i}"}}' for i in range(30))
+    (org_dir / "evals" / "ap-clerk.jsonl").write_text(rows)
+    edit_yaml(path, autonomy={"level": "autonomous", "approved_by": "cfo@contoso.com"})
+    messages = [f.message for f in errors(load_org(org_dir))]
+    assert any("autonomous with write tool 'erp-invoices'" in m for m in messages)
+
+    edit_yaml(path, autonomy={"level": "autonomous_sampled", "approved_by": "cfo@contoso.com", "sample_rate": 0.1})
     assert not has_errors(check_org(load_org(org_dir)))
 
 
@@ -97,11 +105,6 @@ def test_owner_and_budget_required(org_dir):
     assert any("budget.monthly_usd is required" in m for m in messages)
 
 
-def test_memory_scope_opt_in_requires_permission(org_dir):
-    edit_yaml(org_dir / "agents" / "people" / "policy-assistant.yaml", memory={"shared": ["month-end-close"]})
-    assert any("not permitted to use memory scope" in f.message for f in errors(load_org(org_dir)))
-
-
 def test_shared_user_memory_warning(org_dir):
     edit_yaml(
         org_dir / "agents" / "people" / "policy-assistant.yaml",
@@ -109,14 +112,6 @@ def test_shared_user_memory_warning(org_dir):
     )
     warnings = [f for f in check_org(load_org(org_dir)) if f.level == "warning"]
     assert any("shared across all users" in f.message for f in warnings)
-
-
-def test_hub_url_required_for_foundry_env(monkeypatch):
-    monkeypatch.setenv("FOUNDRY_ENDPOINT_DEV", "https://x/api/projects/dev")
-    org = load_org(EXAMPLE, env="dev")
-    assert not has_errors(check_org(org))  # default hub URL supplied via ${env:...:-default}
-    org.config.environments["dev"].hub_url = None
-    assert any("no hub URL" in f.message for f in errors(org))
 
 
 def test_user_context_tools_warn_for_unattended_or_unpublished_agents(org_dir):

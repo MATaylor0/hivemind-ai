@@ -1,9 +1,7 @@
 """The organisation chart: who reports to whom, who reviews whom, who may talk to whom.
 
-The same graph drives three things, so they can never disagree:
-  * the "your position in the organisation" section compiled into each agent's instructions,
-  * the hub's access control (delegate down, escalate up, request review sideways),
-  * the tree / mermaid views and inventory reports.
+The same graph drives the "your position in the organisation" and escalation sections compiled into each
+agent's instructions, accountability (who an agent's work rolls up to), and the tree / mermaid views and reports.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ from .schema import AgentSpec, Tier
 
 
 def selector_matches(selector: str, agent: AgentSpec, tier: Tier | None = None) -> bool:
-    """Audience selectors used by tools, knowledge and memory scopes.
+    """Audience selectors used by tools and knowledge.
 
     ``*`` | ``agent:<name>`` | ``team:<team>`` | ``role:<role>`` | ``tier:<tier>``
     """
@@ -111,20 +109,6 @@ class OrgChart:
                 path.append(current)
                 current = self.agents[current].reports_to
         return cycles
-
-    # ---------------------------------------------------------------- access rules used by the hub
-
-    def can_delegate(self, caller: str, target: str) -> bool:
-        """Managers delegate to direct reports; anyone may hand work to a declared collaborator."""
-        if target not in self.agents or caller == target:
-            return False
-        return self.agents[target].reports_to == caller or target in {c.name for c in self.collaborators(caller)}
-
-    def delegation_targets(self, caller: str) -> list[AgentSpec]:
-        seen: dict[str, AgentSpec] = {a.name: a for a in self.reports(caller)}
-        for c in self.collaborators(caller):
-            seen.setdefault(c.name, c)
-        return [seen[k] for k in sorted(seen)]
 
     # ---------------------------------------------------------------- rendering
 

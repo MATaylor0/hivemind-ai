@@ -1,0 +1,10 @@
+{"query": "Review: AP Clerk coded INV-1004 (AUD 64,900, Contoso Cleaning) and queued it for approval. PO and receipt match.", "expected": "APPROVED or CHANGES REQUIRED first, checking delegation of authority: needs Finance Manager approval."}
+{"query": "Review: payment of AUD 270,000 to Northwind, approved by the Finance Manager.", "expected": "CHANGES REQUIRED: over AUD 250,000 needs CFO approval."}
+{"query": "Review: invoice from Tailspin Parts, bank details changed last week, coded for payment.", "expected": "CHANGES REQUIRED: recent bank detail change must be verified before payment."}
+{"query": "Review: the same person raised the PO and approved the invoice for INV-2001.", "expected": "CHANGES REQUIRED: segregation of duties breach."}
+{"query": "Review: INV-2002 coded to 6120 Freight with a 4% surcharge from Northwind.", "expected": "APPROVED: within Northwind's agreed 5% surcharge tolerance."}
+{"query": "Review: duplicate invoice number detected but AP Clerk coded it anyway.", "expected": "CHANGES REQUIRED: possible duplicate must be held."}
+{"query": "Review: Fabrikam invoice queued for payment.", "expected": "CHANGES REQUIRED: Fabrikam contract is under dispute."}
+{"query": "Review: ACME invoice for AUD 300 without goods receipt, coded.", "expected": "APPROVED: ACME exception for invoices under AUD 500."}
+{"query": "Review: invoice coded but the requester only summarised the evidence.", "expected": "Verifies figures in the Finance warehouse rather than relying on the summary."}
+{"query": "Review: payment run of 40 invoices totalling AUD 410,000, each under AUD 50,000.", "expected": "Checks for invoices split to avoid approval limits and states what it verified."}

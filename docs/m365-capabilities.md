@@ -13,14 +13,14 @@ differ, and they matter for design.
 | Search SharePoint as the user (permission-trimmed) | **SharePoint** tool | `sharepoint` (knowledge) | No: user identity |
 | Search a document library for everyone | **Azure AI Search** index of the library | `azure_ai_search` | Yes |
 | Analyse data | **Fabric data agent**, **Fabric IQ**, Fabric MCP, code interpreter | `fabric_data_agent`, `fabric_iq`, `mcp`, `code_interpreter` | Yes (agent identity) |
-| Create Word, Excel and PowerPoint files | Code interpreter (generates .docx/.xlsx/.pptx); HiveMind `save_output` (Word to SharePoint); OneDrive/SharePoint MCP | `code_interpreter`, hub | Yes |
+| Create Word, Excel and PowerPoint files | Code interpreter (generates .docx/.xlsx/.pptx); OneDrive/SharePoint MCP servers (save files where people work) | `code_interpreter`, `mcp` | Yes |
 | Web answers | Web search, Bing grounding | `web_search`, `bing_grounding` | Yes |
 | Live in Teams and M365 Copilot | **Publish to Microsoft 365** | `channels.m365` + `hivemind publish` | n/a |
 
 ## The differences that matter
 
 1. **User context versus agent context.** Copilot always acts as a person. A HiveMind agent may be chatting with a
-   person (Teams/Copilot) or running unattended (schedules, tasks from other agents). Work IQ, the Work IQ MCP
+   person (Teams/Copilot) or running unattended (schedules, process steps). Work IQ, the Work IQ MCP
    servers and the SharePoint tool act as the signed-in person, so they do nothing in unattended runs.
    - Mark such tools `user_context: true` in the catalog (SharePoint and Work IQ knowledge default to it).
      `hivemind validate` warns when an agent has them but is scheduled, or isn't published to M365.
@@ -39,6 +39,14 @@ differ, and they matter for design.
 5. **Approvals.** Acting as a user (sending mail, posting messages) should be explicit. Catalog entries for those
    tools use `require_approval: always` so the person confirms each action in chat. HiveMind's policy enforces an
    approval or a reviewer for any `access: write` tool.
+
+## Digital workers in Microsoft 365
+
+Microsoft is building the "agent that does a job" pattern into M365 directly. azd can publish an Activity-protocol
+hosted agent as a **Microsoft 365 Digital Worker**, with tenant scope and optional Work IQ permission scopes (Mail,
+Calendar…). HiveMind's prompt agents publish to Teams and M365 Copilot with `hivemind publish`. Digital-worker
+publishing of hosted agents is on the roadmap, so a "replaced role" can appear in M365 as a worker with its own
+identity.
 
 ## Adding one
 

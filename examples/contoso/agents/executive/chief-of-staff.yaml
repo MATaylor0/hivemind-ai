@@ -19,6 +19,10 @@ channels:
     enabled: true
     scope: shared
     short_description: Leadership briefings across Finance, Risk and People.
+autonomy:
+  level: suggest
+evals:
+  dataset: evals/chief-of-staff.jsonl
 budget:
   monthly_usd: 400
   cost_center: EXEC-100

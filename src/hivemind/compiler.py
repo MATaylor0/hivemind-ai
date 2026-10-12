@@ -13,14 +13,12 @@ from typing import Any
 
 import yaml
 
-from .hierarchy import OrgChart
+from . import autonomy
 from .instructions import Fetcher, SourceResolver, compose
 from .loader import Org
-from .schema import AgentSpec, Schedule, ToolDef
+from .schema import AgentSpec, AutonomyLevel, Schedule, ToolDef
 
 MANAGED_BY = "hivemind"
-HUB_SERVER_LABEL = "hivemind"
-HUB_AGENT_HEADER = "x-hivemind-agent"
 USER_SCOPE = "{{$userId}}"  # Foundry memory placeholder: partitions memories per end user.
 
 
@@ -43,6 +41,9 @@ class AgentBuild:
     schedules: list[Schedule] = field(default_factory=list)
     memory_store: MemoryStoreRequirement | None = None
     content_hash: str = ""
+    autonomy: AutonomyLevel = AutonomyLevel.SHADOW
+    removed_tools: list[str] = field(default_factory=list)
+    gated_tools: list[str] = field(default_factory=list)
 
     @property
     def instructions(self) -> str:
@@ -149,7 +150,10 @@ def tool_to_foundry(org: Org, tool: ToolDef) -> dict[str, Any]:
             "fabric_dataagent_preview": {"project_connections": _connections(tool.connection or "")},
         }
     if kind == "fabric_iq":
-        return {"type": "fabric_iq_preview", "project_connection_id": tool.connection}
+        out = {"type": "fabric_iq_preview", "project_connection_id": tool.connection}
+        if tool.require_approval != "never":
+            out["require_approval"] = _approval(tool.require_approval)
+        return out
     if kind == "work_iq":
         return {"type": "work_iq_preview", "project_connection_id": tool.connection}
     if kind == "code_interpreter":
@@ -172,39 +176,6 @@ def tool_to_foundry(org: Org, tool: ToolDef) -> dict[str, Any]:
     raise CompileError(f"tool '{tool.id}': unsupported kind '{kind}'")  # pragma: no cover
 
 
-def hub_tool(org: Org, agent: AgentSpec) -> dict[str, Any] | None:
-    hub = org.config.hub
-    if not hub.enabled:
-        return None
-    url = org.env.hub_url or hub.url
-    out: dict[str, Any] = {
-        "type": "mcp",
-        "server_label": HUB_SERVER_LABEL,
-        "server_url": url or "${HUB_URL_NOT_CONFIGURED}",
-        "server_description": "HiveMind hub: delegation, escalation, review and shared organisational memory.",
-        "require_approval": "never",
-        # Names the calling agent. Set by the deployer, not the model. With an agentic-identity connection the hub
-        # verifies the agent's Entra token: a published agent's own identity must match this name, and agents that
-        # share the project identity may only name themselves (see docs/architecture.md, "Trust boundaries").
-        "headers": {HUB_AGENT_HEADER: agent.name},
-    }
-    if hub.connection:
-        out["project_connection_id"] = hub.connection
-    return out
-
-
-def shared_memory_store(org: Org) -> MemoryStoreRequirement | None:
-    """The store behind the hub's shared scopes (org, team, custom), when Foundry memory is used."""
-    mem = org.config.memory
-    if not org.config.hub.enabled or mem.backend != "foundry":
-        return None
-    return MemoryStoreRequirement(
-        name=f"{org.env.name_prefix}{mem.store}",
-        chat_model=mem.chat_model or org.env.model_overrides.get(org.config.defaults.model, org.config.defaults.model),
-        embedding_model=mem.embedding_model or "text-embedding-3-small",
-    )
-
-
 def resolve_model(org: Org, agent: AgentSpec) -> str:
     role = org.roles[agent.role]
     model = agent.model or role.model or org.config.defaults.model
@@ -219,9 +190,10 @@ def _temperature(org: Org, agent: AgentSpec) -> float | None:
     return None
 
 
-def _metadata(org: Org, agent: AgentSpec, content_hash: str, git_sha: str | None) -> dict[str, str]:
+def _metadata(
+    org: Org, agent: AgentSpec, content_hash: str, git_sha: str | None, decision: autonomy.AutonomyDecision
+) -> dict[str, str]:
     """Foundry allows 16 metadata pairs (values <= 512 chars). These make the fleet queryable."""
-    chart = OrgChart(org.active_agents())
     meta = {
         "managed_by": MANAGED_BY,
         "hm_spec": agent.name,
@@ -232,10 +204,10 @@ def _metadata(org: Org, agent: AgentSpec, content_hash: str, git_sha: str | None
         "hm_owner": agent.owner or "",
         "hm_reports_to": agent.reports_to or "",
         "hm_reviewed_by": agent.reviewed_by or "",
-        "hm_depth": str(chart.depth(agent.name)) if agent.name in chart.agents else "0",
         "hm_cost_center": agent.budget.cost_center or "",
         "hm_budget_usd": "" if agent.budget.monthly_usd is None else f"{agent.budget.monthly_usd:g}",
         "hm_git_sha": git_sha or "",
+        **autonomy.metadata(agent, decision),
     }
     for key, value in agent.tags.items():
         if len(meta) >= 16:
@@ -256,12 +228,8 @@ def compile_agent(
     fetch = fetch or SourceResolver(org.root)
 
     tool_ids = effective_tool_ids(org, spec)
-    tool_defs = [resolve_tool(org, t) for t in tool_ids]
+    tool_defs, decision = autonomy.apply(org, spec, [resolve_tool(org, t) for t in tool_ids])
     tools = [tool_to_foundry(org, t) for t in tool_defs]
-
-    hub = hub_tool(org, spec)
-    if hub:
-        tools.append(hub)
 
     memory_store: MemoryStoreRequirement | None = None
     if spec.memory.private:
@@ -280,7 +248,7 @@ def compile_agent(
             }
         )
 
-    composed = compose(org, spec, tool_defs, fetch)
+    composed = compose(org, spec, tool_defs, fetch, autonomy.mode_section(decision))
 
     definition: dict[str, Any] = {
         "kind": "prompt",
@@ -307,12 +275,15 @@ def compile_agent(
         name=foundry_name(org, spec.name),
         description=description,
         definition=definition,
-        metadata=_metadata(org, spec, content_hash, git_sha),
-        tool_ids=tool_ids,
+        metadata=_metadata(org, spec, content_hash, git_sha, decision),
+        tool_ids=[t.id for t in tool_defs],
         instruction_sources=composed.sources,
         schedules=list(spec.schedules),
         memory_store=memory_store,
         content_hash=content_hash,
+        autonomy=decision.effective,
+        removed_tools=decision.removed_tools,
+        gated_tools=decision.gated_tools,
     )
 
 

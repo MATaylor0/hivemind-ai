@@ -1,0 +1,26 @@
+# Microsoft Agent Framework declarative workflow (https://aka.ms/agent-framework). HiveMind validates the agent
+# names against the org, rewrites them per environment and deploys this as a Foundry hosted agent.
+kind: Workflow
+trigger:
+  kind: OnConversationStart
+  id: invoice_to_pay
+  actions:
+    - kind: InvokeAzureAgent
+      id: code_invoices
+      agent:
+        name: ap-clerk
+
+    - kind: InvokeAzureAgent
+      id: compliance_review
+      agent:
+        name: compliance-reviewer
+
+    - kind: RequestExternalInput
+      id: payment_approval
+      prompt: Review the coding and the compliance review above. Reply 'approved' to release the payment run, or say what must change.
+      variable: Local.approval
+
+    - kind: InvokeAzureAgent
+      id: release_payments
+      agent:
+        name: ap-clerk

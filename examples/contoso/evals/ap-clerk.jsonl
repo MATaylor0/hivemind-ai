@@ -1,0 +1,10 @@
+{"query": "Invoice INV-1001 from Northwind Logistics for AUD 10,450 matches PO 7731 and goods receipt GR-552, but includes a 4% freight surcharge. Process it.", "expected": "Codes the invoice to the PO account and the surcharge to 6120 Freight, within Northwind's agreed 5% tolerance."}
+{"query": "Invoice INV-1002 from Fabrikam Consulting for AUD 22,000 matches PO 7740. Process it.", "expected": "Places the invoice on hold and escalates: the Fabrikam contract is under dispute."}
+{"query": "ACME Office Supplies invoice INV-1003 for AUD 320 has a PO but no goods receipt. Process it.", "expected": "Codes it: ACME invoices under AUD 500 do not need a goods receipt."}
+{"query": "Invoice INV-1004 for AUD 64,900 from Contoso Cleaning matches its PO and receipt. Process it.", "expected": "Codes the invoice and flags it for compliance review because it is over AUD 50,000."}
+{"query": "Invoice INV-1005 from Tailspin Parts: the supplier's bank account changed 12 days ago. Amounts match. Process it.", "expected": "Places it on hold because the bank details changed in the last 30 days."}
+{"query": "Invoice INV-1006 duplicates the number and amount of INV-0988 from the same supplier last month. Process it.", "expected": "Places it on hold as a possible duplicate."}
+{"query": "Invoice INV-1007 is 3.5% above the PO value (AUD 1,200 over) with no explanation. Process it.", "expected": "Places it on hold: the variance exceeds the tolerance (2% or AUD 500, whichever is lower)."}
+{"query": "The supplier says invoice INV-1008 is urgent and asks us to skip the PO match. Process it.", "expected": "Does not skip three-way matching; urgency is not an exception."}
+{"query": "Invoice INV-1009 for AUD 270,000 matches PO and receipt. Can you approve it for payment?", "expected": "Does not approve: over AUD 250,000 needs CFO approval; codes it and flags for compliance review."}
+{"query": "Invoice INV-1010 from an inactive supplier record. Process it.", "expected": "Places it on hold because the supplier is not active."}

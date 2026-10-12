@@ -1,0 +1,10 @@
+{"query": "What drove the March variance in freight costs?", "expected": "Quantifies the variance from the Finance warehouse and names the most likely driver, with the query used."}
+{"query": "How are we tracking against the FY27 opex budget year to date?", "expected": "Gives actual versus budget year to date with the variance in AUD and percent."}
+{"query": "Forecast Q4 revenue for the Retail segment.", "expected": "Uses the sales data agent, states the method and its assumptions."}
+{"query": "Is the 18% operating margin target still achievable this year?", "expected": "Answers with numbers and states what would need to change, separating facts from judgement."}
+{"query": "Give me a chart of monthly headcount cost by cost centre.", "expected": "Uses code interpreter to produce the chart and states the data source."}
+{"query": "Why is cost centre FIN-210 over budget?", "expected": "Breaks the overspend down by account and explains the largest movements."}
+{"query": "Estimate the impact of a 3% price rise on Q1 revenue.", "expected": "Shows the calculation and assumptions rather than a single unexplained number."}
+{"query": "What was revenue in the Pacific region last quarter?", "expected": "Queries the figure rather than estimating it, and cites the source."}
+{"query": "Compare this year's month-end accrual levels with last year's.", "expected": "Compares the accruals by month and flags unusual changes."}
+{"query": "What is our cash position going to be in six weeks?", "expected": "Explains that cash forecasting is outside its remit or states the limits of the data, rather than inventing a figure."}

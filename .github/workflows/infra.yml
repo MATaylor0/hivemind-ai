@@ -1,12 +1,12 @@
-# Platform infrastructure for one environment: Foundry, monitoring, the hub (Container Apps) and identities.
-# PRs touching infra/ get a Bicep build and lint. Deployments are manual: "what-if" previews changes; "deploy"
-# applies them and rolls out a hub image built from this commit (with the org directory baked in).
-# Prerequisites: infra/scripts/bootstrap.sh and `entra-setup.sh app` (see infra/README.md).
+# Platform infrastructure for one environment: Foundry account and project, monitoring, registry, deploy identity.
+# Everything that runs on Foundry is deployed by the "Deploy agents" workflow (azd), not here.
+# PRs touching infra/ get a Bicep build and lint; deployments are manual (what-if, then deploy).
+# Prerequisite: infra/scripts/bootstrap.sh (see infra/README.md).
 name: Infrastructure
 
 on:
   pull_request:
-    paths: ["infra/**", ".github/workflows/infra.yml", "deploy/**"]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
   workflow_dispatch:
     inputs:
       environment:
@@ -15,7 +15,7 @@ on:
         options: [dev, prod]
         default: dev
       action:
-        description: what-if previews; deploy applies and rolls out the hub
+        description: what-if previews; deploy applies
         type: choice
         options: [what-if, deploy]
         default: what-if
@@ -46,8 +46,6 @@ jobs:
     env:
       RG: ${{ vars.HIVEMIND_RESOURCE_GROUP }}
       PARAMS: infra/main.${{ inputs.environment }}.bicepparam
-      HIVEMIND_HUB_AUDIENCE: ${{ vars.HIVEMIND_HUB_AUDIENCE }}
-      ORG_DIR: ${{ vars.HIVEMIND_ORG || 'examples/contoso' }}
     steps:
       - uses: actions/checkout@v4
       - uses: azure/login@v2
@@ -55,39 +53,18 @@ jobs:
           client-id: ${{ vars.AZURE_INFRA_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Keep the running hub image
-        run: |
-          image=$(az containerapp list -g "$RG" --query "[?ends_with(name, '-hub')].properties.template.containers[0].image | [0]" -o tsv 2>/dev/null || true)
-          echo "HIVEMIND_HUB_IMAGE=${image:-mcr.microsoft.com/k8se/quickstart:latest}" >> "$GITHUB_ENV"
-
       - name: What-if
         if: inputs.action == 'what-if'
         run: az deployment group what-if -g "$RG" -f infra/main.bicep -p "$PARAMS" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Deploy infrastructure
+      - name: Deploy
         if: inputs.action == 'deploy'
         run: |
           az deployment group create -g "$RG" -n "hivemind-${{ github.run_number }}" -f infra/main.bicep -p "$PARAMS" \
-            --query properties.outputs -o json > outputs.json
-          echo "ACR=$(jq -r .registryName.value outputs.json)" >> "$GITHUB_ENV"
-
-      - name: Build hub image (org directory baked in)
-        if: inputs.action == 'deploy'
-        run: |
-          az acr build -r "$ACR" -t "hivemind-hub:${GITHUB_SHA::12}" -f deploy/hub.Dockerfile --build-arg ORG_DIR="$ORG_DIR" .
-          echo "HIVEMIND_HUB_IMAGE=$(az acr show -n "$ACR" --query loginServer -o tsv)/hivemind-hub:${GITHUB_SHA::12}" >> "$GITHUB_ENV"
-
-      - name: Roll out hub image
-        if: inputs.action == 'deploy'
-        run: |
-          az deployment group create -g "$RG" -n "hivemind-${{ github.run_number }}-hub" -f infra/main.bicep -p "$PARAMS" \
             --query properties.outputs -o json > outputs.json
           {
             echo "### Set these variables on the '${{ inputs.environment }}' GitHub environment"
             echo '```'
             jq -r '.githubVariables.value | to_entries[] | "\(.key)=\(.value)"' outputs.json
             echo '```'
-            echo "Hub identity (grant SharePoint access with infra/scripts/entra-setup.sh sharepoint): $(jq -r .hubClientId.value outputs.json)"
-            echo "Deploy identity: $(jq -r .deployClientId.value outputs.json)"
+            echo "Grant SharePoint access: infra/scripts/entra-setup.sh sharepoint ${{ inputs.environment }} <site> $(jq -r .deployClientId.value outputs.json)"
           } >> "$GITHUB_STEP_SUMMARY"

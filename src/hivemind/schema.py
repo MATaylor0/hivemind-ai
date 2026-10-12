@@ -2,13 +2,15 @@
 
 Everything an agent fleet needs is described by these models and loaded from YAML:
 
-* ``OrgConfig``      - ``hivemind.yaml``: org-wide defaults, teams, memory, hub, policies, environments.
+* ``OrgConfig``      - ``hivemind.yaml``: org-wide defaults, goals, teams, policies, environments.
 * ``ToolDef``        - ``catalog/tools/*.yaml``: a tool defined once, referenced by many agents.
 * ``KnowledgeDef``   - ``catalog/knowledge/*.yaml``: a knowledge source (SharePoint, AI Search, Fabric...).
 * ``RoleDef``        - ``roles/*.yaml``: a reusable archetype (worker, manager, reviewer, executive...).
-* ``AgentSpec``      - ``agents/*.yaml``: one agent - its job, position in the hierarchy, tools and channels.
+* ``AgentSpec``      - ``agents/*.yaml``: one digital worker - its job, place in the org, tools, autonomy, evals.
+* ``ProcessSpec``    - ``processes/*.yaml``: an end-to-end process run by agents (an Agent Framework workflow).
 
-The models are deliberately provider-neutral; ``hivemind.compiler`` turns them into Foundry definitions.
+The models are deliberately provider-neutral; ``hivemind.compiler`` turns them into Foundry definitions and
+``hivemind.azd`` into an ``azure.yaml`` that the Azure Developer CLI deploys.
 """
 
 from __future__ import annotations
@@ -44,6 +46,27 @@ class Tier(StrEnum):
     MANAGER = "manager"
     REVIEWER = "reviewer"
     WORKER = "worker"
+
+
+class AutonomyLevel(StrEnum):
+    """How much an agent may do on its own. Agents earn promotion with evidence (evals, sign-off).
+
+    * ``shadow``             - runs alongside people; its output is not used and it takes no actions.
+    * ``suggest``            - proposes what to do; a person does it. No write tools.
+    * ``approve``            - acts, but every change needs a person's approval (MCP require_approval).
+    * ``autonomous``         - acts on its own within its tools and policies.
+    * ``autonomous_sampled`` - acts on its own; a share of its work is reviewed by people after the fact.
+    """
+
+    SHADOW = "shadow"
+    SUGGEST = "suggest"
+    APPROVE = "approve"
+    AUTONOMOUS = "autonomous"
+    AUTONOMOUS_SAMPLED = "autonomous_sampled"
+
+    @property
+    def rank(self) -> int:
+        return list(AutonomyLevel).index(self)
 
 
 class InstructionSource(_Model):
@@ -123,20 +146,41 @@ class Channels(_Model):
 
 
 class MemoryConfig(_Model):
-    """Per-agent memory settings.
-
-    ``private`` gives the agent Foundry's native long-term memory (``memory_search`` tool).
-    ``shared`` lists hub memory scopes the agent may use (subject to the org's ACLs);
-    the agent's team scope is always included.
-    """
+    """Per-agent long-term memory: a Foundry memory store behind the native ``memory_search`` tool."""
 
     private: bool = True
     private_scope: Literal["agent", "user"] = Field(
         default="user",
-        description="'user' partitions private memory per end user (safe for Teams/M365 agents); "
+        description="'user' partitions memory per end user (safe for Teams/M365 agents); "
         "'agent' gives one memory for the agent itself (suits unattended agents).",
     )
-    shared: list[str] = Field(default_factory=list)
+
+
+class Autonomy(_Model):
+    """The agent's current autonomy level and the evidence for it. Changes go through pull requests.
+
+    New agents start in ``shadow``, like a new hire shadowing the person who does the job today.
+    """
+
+    level: AutonomyLevel = AutonomyLevel.SHADOW
+    sample_rate: float | None = Field(
+        default=None, gt=0, le=1, description="autonomous_sampled: share of runs routed to human review."
+    )
+    approved_by: str | None = Field(default=None, description="Who signed off this level (UPN/email).")
+    approved_on: str | None = Field(default=None, description="When (YYYY-MM-DD).")
+    evidence: str | None = Field(default=None, description="Link to the eval run, pilot report or decision record.")
+
+
+class EvalSpec(_Model):
+    """Loop engineering for one agent: a golden dataset that gates deployment, plus production trace evaluation.
+
+    Compiled to an ``azure.ai.eval`` service; ``hivemind gate`` runs it with a pass-rate threshold.
+    """
+
+    dataset: str | None = Field(default=None, description="JSONL of {query, expected?} rows, relative to the org.")
+    evaluators: list[str] = Field(default_factory=list, description="Defaults to policies.evals.evaluators.")
+    pass_rate: float | None = Field(default=None, ge=0, le=1, description="Overrides the autonomy level's gate.")
+    trace_eval: bool = Field(default=True, description="Also evaluate a sample of real production traces.")
 
 
 # --------------------------------------------------------------------------------------------------
@@ -313,8 +357,11 @@ class AgentSpec(_Model):
     # Why this agent exists - ids from `goals` in hivemind.yaml
     goals: list[str] = Field(default_factory=list)
 
+    # How far it may act on its own, and how that is earned
+    autonomy: Autonomy = Field(default_factory=Autonomy)
+    evals: EvalSpec = Field(default_factory=EvalSpec)
+
     # Operations
-    max_concurrent_tasks: int = Field(default=1, ge=1, le=20)
     channels: Channels = Field(default_factory=Channels)
     schedules: list[Schedule] = Field(default_factory=list)
     budget: Budget = Field(default_factory=Budget)
@@ -343,84 +390,26 @@ class TeamDef(_Model):
     tools: list[str] = Field(default_factory=list)
 
 
-class MemoryScopeDef(_Model):
-    read: list[str] = Field(default_factory=lambda: ["*"])
-    write: list[str] = Field(default_factory=list)
-    description: str = ""
-
-
 class OrgMemory(_Model):
-    """Shared memory. ``store`` is a Foundry memory store; the hub enforces scope ACLs on top of it.
+    """Models for the per-agent Foundry memory stores."""
 
-    Implicit scopes always exist: ``agent:<name>`` (the agent only) and ``team:<team>`` (team members).
-    """
-
-    store: str = "hivemind-memory"
-    backend: Literal["foundry", "in_memory"] = "foundry"
     chat_model: str | None = None
     embedding_model: str | None = None
-    scopes: dict[str, MemoryScopeDef] = Field(default_factory=dict)
-
-
-class TaskQueueConfig(_Model):
-    """Agent-to-agent work is queued as tasks. ``sharepoint`` keeps the queue in a SharePoint list so people
-    can see, create and follow tasks in SharePoint, Teams or the Lists app."""
-
-    backend: Literal["sharepoint", "in_memory"] = "sharepoint"
-    workers: int = Field(default=4, ge=0, le=64, description="Concurrent task runs per hub replica (0 = none).")
-    poll_seconds: float = Field(default=10, gt=0)
-    lease_minutes: int = Field(default=15, ge=1, description="A claimed task returns to the queue after this.")
-    max_attempts: int = Field(default=3, ge=1)
-    wait_seconds: int = Field(
-        default=45,
-        ge=0,
-        le=300,
-        description="How long a delegating agent waits for a result (keep under the MCP call timeout).",
-    )
-    max_tasks_per_request: int = Field(
-        default=30, ge=1, description="Cap on tasks spawned from one original request, to stop runaway loops."
-    )
-
-
-class HubConfig(_Model):
-    """The HiveMind Hub: an MCP server granted to every agent for delegation, escalation, review, shared memory,
-    tasks and outputs. Disable it to run agents as isolated Foundry agents."""
-
-    enabled: bool = True
-    url: str | None = None
-    connection: str | None = Field(
-        default=None,
-        description="Foundry project connection the hub tool authenticates with: an agentic-identity connection "
-        "(auth: entra) or a custom-keys connection holding x-hivemind-key (auth: key).",
-    )
-    auth: Literal["entra", "key"] = Field(
-        default="entra",
-        description="'entra': validate the agent's Microsoft Entra token. 'key': shared key (development).",
-    )
-    audience: str | None = Field(default=None, description="Expected token audience (the hub's app ID URI).")
-    tenant_id: str | None = None
-    max_delegation_depth: int = Field(default=4, ge=1, le=10)
-    tasks: TaskQueueConfig = Field(default_factory=TaskQueueConfig)
 
 
 class SharePointConfig(_Model):
-    """The HiveMind SharePoint site: where non-technical people shape and follow the agents.
+    """The HiveMind SharePoint site, where non-technical people shape the agents' rules.
 
-    * ``rules_library``   - Word/markdown rules by convention: Organisation/, Roles/<role>/, Teams/<team>/,
-                            Agents/<agent>/. Every file is added to the matching instruction layer.
-    * ``outputs_library`` - documents agents produce (``save_output``), filed by team and agent.
-    * ``tasks_list``      - the task queue, visible and editable by people.
+    ``rules_library`` holds Word/markdown rules by convention: Organisation/, Roles/<role>/, Teams/<team>/,
+    Agents/<agent>/. Every file is added to the matching instruction layer.
     """
 
     site: str = Field(description="e.g. contoso.sharepoint.com/sites/HiveMind")
     rules_library: str = "Agent Rules"
-    outputs_library: str = "Agent Outputs"
-    tasks_list: str = "Agent Tasks"
-    output_format: Literal["docx", "md"] = "docx"
 
 
 class GoalDef(_Model):
-    """An organisational goal. Tasks and agents link to goals so every piece of work carries its 'why'."""
+    """An organisational goal. Agents and processes link to goals so every piece of work carries its 'why'."""
 
     title: str
     description: str = ""
@@ -449,11 +438,41 @@ class ModelPrice(_Model):
 ModelPolicy.model_rebuild()
 
 
+class EvalGate(_Model):
+    """Evidence an agent needs before it may run at an autonomy level."""
+
+    min_cases: int = Field(default=0, ge=0)
+    pass_rate: float = Field(default=0.0, ge=0, le=1)
+    require_approver: bool = False
+
+
+def _default_gates() -> dict[AutonomyLevel, EvalGate]:
+    return {
+        AutonomyLevel.SHADOW: EvalGate(),
+        AutonomyLevel.SUGGEST: EvalGate(min_cases=5, pass_rate=0.7),
+        AutonomyLevel.APPROVE: EvalGate(min_cases=10, pass_rate=0.8, require_approver=True),
+        AutonomyLevel.AUTONOMOUS: EvalGate(min_cases=30, pass_rate=0.95, require_approver=True),
+        AutonomyLevel.AUTONOMOUS_SAMPLED: EvalGate(min_cases=30, pass_rate=0.95, require_approver=True),
+    }
+
+
+class EvalPolicy(_Model):
+    evaluators: list[str] = Field(
+        default_factory=lambda: ["builtin.task_adherence", "builtin.intent_resolution"],
+        description="Foundry evaluators applied to every agent's datasets and traces.",
+    )
+    judge_model: str | None = Field(default=None, description="Model deployment used by AI-assisted evaluators.")
+    trace_lookback_hours: int = Field(default=24, ge=1)
+    trace_sample: int = Field(default=50, ge=1)
+    gates: dict[AutonomyLevel, EvalGate] = Field(default_factory=_default_gates)
+
+
 class Policies(_Model):
     require_owner: bool = True
     require_budget: bool = False
     require_reviewer_for_write_tools: bool = True
     max_hierarchy_depth: int = 6
+    evals: EvalPolicy = Field(default_factory=EvalPolicy)
 
 
 class Environment(_Model):
@@ -461,6 +480,18 @@ class Environment(_Model):
     same spec can point at dev and prod connections."""
 
     provider: Literal["foundry", "local"] = "foundry"
+    deploy_engine: Literal["azd", "sdk"] = Field(
+        default="azd",
+        description="'azd': generate azure.yaml and run `azd deploy` (agents, routines, evals, processes). "
+        "'sdk': deploy prompt agents directly with azure-ai-projects (no processes or eval services).",
+    )
+    max_autonomy: AutonomyLevel = Field(
+        default=AutonomyLevel.AUTONOMOUS_SAMPLED,
+        description="Ceiling for every agent in this environment, e.g. keep a pilot tenant at 'approve'.",
+    )
+    model_deployments: list[ModelDeployment] = Field(
+        default_factory=list, description="Model deployments azd upserts on the Foundry project."
+    )
     protected: bool = Field(
         default=False,
         description="Changes only through CI (pull request + approval). The admin console allows read-only commands.",
@@ -470,12 +501,23 @@ class Environment(_Model):
     variables: dict[str, str] = Field(default_factory=dict)
     model_overrides: dict[str, str] = Field(default_factory=dict)
     disabled_agents: list[str] = Field(default_factory=list)
-    hub_url: str | None = None
     sharepoint_site: str | None = Field(default=None, description="Overrides sharepoint.site for this environment.")
     sharepoint_local_dir: str | None = Field(
         default=None,
         description="Use a local folder (relative to the org dir) instead of SharePoint - for local runs and tests.",
     )
+
+
+class ModelDeployment(_Model):
+    name: str
+    model: str
+    version: str
+    format: str = "OpenAI"
+    sku: str = "GlobalStandard"
+    capacity: int = 50
+
+
+Environment.model_rebuild()
 
 
 class OrgInfo(_Model):
@@ -491,7 +533,57 @@ class OrgConfig(_Model):
     goals: dict[str, GoalDef] = Field(default_factory=dict)
     sharepoint: SharePointConfig | None = None
     memory: OrgMemory = Field(default_factory=OrgMemory)
-    hub: HubConfig = Field(default_factory=HubConfig)
     models: ModelPolicy = Field(default_factory=ModelPolicy)
     policies: Policies = Field(default_factory=Policies)
     environments: dict[str, Environment] = Field(default_factory=lambda: {"local": Environment(provider="local")})
+
+
+# --------------------------------------------------------------------------------------------------
+# Processes
+# --------------------------------------------------------------------------------------------------
+
+
+class ProcessTrigger(_Model):
+    """Start the process on a schedule (a Foundry routine invoking the process host)."""
+
+    name: str
+    cron: str
+    time_zone: str = "UTC"
+    input: str
+    enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        return _check_name(value)
+
+
+class ProcessSpec(_Model):
+    """An end-to-end business process run by agents, with people at the approval points.
+
+    The orchestration itself is a Microsoft Agent Framework declarative workflow (``workflow``, a YAML file in
+    Microsoft's format). HiveMind validates it against the org (agents exist, autonomy rules, approval steps),
+    rewrites agent names per environment and deploys it as a Foundry hosted agent.
+    """
+
+    api_version: Literal["hivemind/v1"] = Field(default="hivemind/v1", alias="apiVersion")
+    kind: Literal["Process"] = "Process"
+
+    name: str
+    display_name: str | None = None
+    description: str
+    owner: str | None = None
+    goal: str | None = None
+    workflow: str = Field(description="Path (relative to the org directory) to the Agent Framework workflow YAML.")
+    triggers: list[ProcessTrigger] = Field(default_factory=list)
+    budget: Budget = Field(default_factory=Budget)
+    enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        return _check_name(value)
+
+    @property
+    def title(self) -> str:
+        return self.display_name or self.name.replace("-", " ").title()

@@ -45,7 +45,7 @@ const views = {
     const c = o.counts;
     const tiles = [
       ["Agents", `${c.active_agents}${c.active_agents !== c.agents ? ` / ${c.agents}` : ""}`],
-      ["Teams", c.teams], ["Roles", c.roles], ["Tools", c.tools], ["Knowledge", c.knowledge], ["Goals", c.goals],
+      ["Processes", c.processes], ["Teams", c.teams], ["Tools", c.tools], ["Knowledge", c.knowledge], ["Goals", c.goals],
       ["Monthly budget", money(c.monthly_budget_usd)],
       ["Policy errors", c.errors, c.errors ? "err" : ""],
       ["Warnings", c.warnings, c.warnings ? "warn" : ""],
@@ -78,7 +78,7 @@ const views = {
       </tbody></table></div>
       ${sp ? `<h2>SharePoint site</h2><div class="card facts">
         <div><span>Site</span>${h(sp.site)}</div><div><span>Rules library</span>${h(sp.rules_library)}</div>
-        <div><span>Outputs library</span>${h(sp.outputs_library)}</div><div><span>Task list</span>${h(sp.tasks_list)}</div></div>` : ""}`;
+        <div><span>Owned by the business</span>Word documents per organisation, role, team and agent folder</div></div>` : ""}`;
   },
 
   async chart() {
@@ -129,6 +129,8 @@ const views = {
       ["Model", b && b.model], ["Budget / month", spec.budget ? money(spec.budget.monthly_usd) : "–"],
       ["Cost centre", spec.budget && spec.budget.cost_center], ["Foundry name", b && b.name],
       ["Content hash", b && b.hash], ["Private memory", b && b.memory_store],
+      ["Autonomy", (spec.autonomy && spec.autonomy.level || "approve").replace("_", " ")],
+      ["Approved by", spec.autonomy && spec.autonomy.approved_by], ["Eval dataset", spec.evals && spec.evals.dataset],
     ];
     const env = currentEnv();
     const remote = env && env.provider === "foundry";
@@ -197,39 +199,63 @@ const views = {
       </tbody></table></div>`;
   },
 
-  async tasks() {
+  async autonomy() {
+    const a = await api("autonomy");
+    if (a.error) return errorBox(a.error);
     const env = currentEnv();
-    if (!env) return `<h1>Tasks</h1><p class="empty">Choose an environment.</p>`;
-    const t = await api("tasks");
-    const header = `<h1>Tasks · ${h(env.name)}</h1>
-      <p class="sub">The queue between agents, and from people to agents. In Foundry environments this is the
-      SharePoint "Agent Tasks" list.</p>`;
-    if (t.error) return header + errorBox(t.error);
-    const statusCls = { Queued: "info", InProgress: "warn", Done: "ok", Failed: "err", Cancelled: "" };
-    const canChange = !env.protected;
-    return `${header}
+    const rank = (lvl) => a.levels.indexOf(lvl);
+    const levelBadge = (lvl) => badge(lvl.replace("_", " "), ["shadow", "suggest"].includes(lvl) ? "" :
+      lvl === "approve" ? "warn" : "ok");
+    const rows = a.agents.map((x) => {
+      const casesOk = x.cases != null && x.cases >= x.min_cases;
+      return `<tr class="click" data-agent="${h(x.name)}">
+        <td><strong>${h(x.title)}</strong><br><span class="mono">${h(x.name)}</span></td>
+        <td>${levelBadge(x.declared)}${x.capped ? ` → ${levelBadge(x.effective)} <span class="sub">capped</span>` : ""}</td>
+        <td>${x.approved_by ? `${h(x.approved_by)}<br><span class="sub">${h(x.approved_on)}</span>` : "–"}</td>
+        <td class="num">${x.cases == null ? badge("invalid", "err") : `${x.cases} / ${x.min_cases}`}
+          ${casesOk ? "" : badge("short", "err")}</td>
+        <td class="num">${Math.round(x.pass_rate * 100)}%</td>
+        <td>${x.gated_tools.map((t) => badge(t, "warn")).join(" ") || "–"}</td>
+        <td>${x.held_tools.map((t) => badge(t)).join(" ") || "–"}</td></tr>`;
+    }).join("");
+    return `<h1>Autonomy${env ? ` · ${h(env.name)}` : ""}</h1>
+      <p class="sub">How far each agent may act on its own, and the evidence behind it. Agents move up a level by
+      pull request: more golden eval cases, a passing gate and a named approver.
+      ${a.max_autonomy ? `This environment caps every agent at <strong>${h(a.max_autonomy.replace("_", " "))}</strong>.` : ""}</p>
+      <div class="legend">${a.levels.map((l) => `${levelBadge(l)}`).join(" → ")}</div>
       <div class="toolbar">
-        ${Object.entries(t.counts).map(([k, v]) => badge(`${k} ${v}`, statusCls[k])).join(" ") || `<span class="empty">No tasks yet.</span>`}
-        <span style="flex:1"></span>
-        ${canChange ? `<button class="primary" id="new-task">Give an agent a task…</button>
-          <button data-run="tasks run -e ${h(env.name)}">Work the queue</button>` : ""}
-        <button data-run="tasks list -e ${h(env.name)}">List in console</button>
+        ${env ? `<button data-run="gate -e ${h(env.name)}">Run eval gates</button>` : ""}
+        ${env && env.provider === "foundry" ? `<button data-run="gate -e ${h(env.name)} --dry-run">Show gate commands</button>` : ""}
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>Kind</th><th>Title</th>
-        <th>Requested by</th><th>Parent</th></tr></thead><tbody>
-        ${t.tasks.map((x) => `<tr class="click" data-task="${h(x.id)}">
-          <td class="mono">${h(x.id)}</td><td>${badge(x.status, statusCls[x.status])}</td>
-          <td><a href="#/agents/${h(x.assigned_to)}">${h(x.assigned_to)}</a></td><td>${h(x.kind)}</td><td>${h(x.title)}</td>
-          <td>${h(x.requested_by)}</td><td class="mono">${h(x.parent_id || "–")}</td></tr>
-          <tr class="task-detail" data-for="${h(x.id)}" hidden><td colspan="7">
-            ${x.goal ? `<div><strong>Goal</strong> ${h(x.goal)}</div>` : ""}
-            <div><strong>Instructions</strong><pre class="prompt">${h(x.instructions)}</pre></div>
-            ${x.result ? `<div><strong>Result</strong><pre class="prompt">${h(x.result)}</pre></div>` : ""}
-            ${x.error ? `<div><strong>Error</strong><pre class="prompt">${h(x.error)}</pre></div>` : ""}
-            ${x.output_url ? `<div><strong>Output</strong> <a href="${h(x.output_url)}" target="_blank" rel="noopener">${h(x.output_url)}</a></div>` : ""}
-            <div class="sub">attempts ${h(x.attempts)} · depth ${h(x.depth)} · root ${h(x.root_id)} · created ${h(x.created_at)}</div>
-          </td></tr>`).join("")}
-      </tbody></table></div>`;
+      <div class="table-wrap"><table><thead><tr><th>Agent</th><th>Level</th><th>Approved by</th>
+        <th>Eval cases (have / need)</th><th>Gate pass rate</th><th>Approval-gated tools</th><th>Held back</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      <p class="sub" style="margin-top:12px">Levels: shadow (runs alongside people, takes no action) · suggest (recommends)
+      · approve (acts, each change approved) · autonomous · autonomous sampled (a share reviewed afterwards).</p>`;
+  },
+
+  async processes() {
+    const p = await api("processes");
+    if (p.error) return errorBox(p.error);
+    const env = currentEnv();
+    const local = env && env.provider === "local";
+    const step = (x) => x.agent
+      ? `<a class="badge info" href="#/agents/${h(x.agent)}">${h(x.agent)}</a>`
+      : badge(x.kind === "RequestExternalInput" || x.kind === "Question" ? "person" : x.kind, x.kind === "RequestExternalInput" || x.kind === "Question" ? "warn" : "");
+    const cards = p.processes.map((x) => `<div class="card" style="margin-bottom:14px">
+      <h2 style="margin-top:0">${h(x.title)} ${x.enabled ? "" : badge("disabled", "warn")}</h2>
+      <p class="sub">${h(x.description)}</p>
+      <div class="facts" style="margin-bottom:10px"><div><span>Owner</span>${h(x.owner || "–")}</div>
+        <div><span>Goal</span>${h(x.goal || "–")}</div><div><span>Workflow</span><span class="mono">${h(x.workflow)}</span></div>
+        <div><span>Deployed as</span><span class="mono">${h(x.foundry_name)}</span></div></div>
+      <div class="toolbar">${x.steps.map(step).join(" → ") || `<span class="empty">no steps</span>`}</div>
+      ${x.findings.length ? `<ul class="findings">${x.findings.map((f) => `<li>${badge(f.level, f.level === "error" ? "err" : "warn")}<span>${h(f.message)}</span></li>`).join("")}</ul>` : ""}
+      ${x.triggers.length ? `<div class="sub">Runs ${x.triggers.map((t) => `<span class="mono">${h(t.cron)}</span> (${h(t.time_zone)})`).join(", ")}</div>` : ""}
+      ${local ? `<div class="toolbar"><button data-run="process run ${h(x.name)} '${h((x.triggers[0] || {}).input || "Start")}' --answer approved -e ${h(env.name)}">Run locally (auto-approve)</button></div>` : ""}
+    </div>`).join("");
+    return `<h1>Processes</h1>
+      <p class="sub">End-to-end processes run by agents, with people at the approval points. Each is a Microsoft Agent
+      Framework workflow, deployed as a Foundry hosted agent.</p>${cards || `<p class="empty">No processes defined.</p>`}`;
   },
 };
 
@@ -291,12 +317,6 @@ function bindView() {
   });
   const runPlan = $("#run-plan");
   if (runPlan) runPlan.addEventListener("click", () => { store.set(`plan.${state.env}`, true); render(); });
-  document.querySelectorAll("tr[data-task]").forEach((tr) => tr.addEventListener("click", () => {
-    const detail = document.querySelector(`tr.task-detail[data-for="${CSS.escape(tr.dataset.task)}"]`);
-    if (detail) detail.hidden = !detail.hidden;
-  }));
-  const newTask = $("#new-task");
-  if (newTask) newTask.addEventListener("click", openTaskDialog);
 }
 
 // ------------------------------------------------------------------ console
@@ -396,27 +416,9 @@ function setConsoleOpen(open) {
 
 function renderChips() {
   const e = envArg();
-  const chips = ["validate", "tree", `inventory${e}`, `plan${e || " -e local"}`, `tasks list${e || " -e local"}`, "budget", "--help"];
+  const chips = ["validate", "tree", `inventory${e}`, `plan${e || " -e local"}`, `gate${e || " -e local"}`, "process list", "budget", "--help"];
   $("#chips").innerHTML = chips.map((c) => `<button type="button" data-chip="${h(c)}">${h(c)}</button>`).join(" ");
   document.querySelectorAll("[data-chip]").forEach((b) => b.addEventListener("click", () => runCommand(b.dataset.chip)));
-}
-
-async function openTaskDialog() {
-  const dlg = $("#task-dialog");
-  const form = $("#task-form");
-  form.agent.innerHTML = state.overview.agents.filter((a) => a.enabled)
-    .map((a) => `<option value="${h(a.name)}">${h(a.title)} (${h(a.name)})</option>`).join("");
-  const flatten = (nodes) => nodes.flatMap((g) => [g, ...flatten(g.children)]);
-  form.goal.innerHTML = `<option value="">—</option>` + flatten(state.overview.goals)
-    .map((g) => `<option value="${h(g.id)}">${h(g.title)}</option>`).join("");
-  form.reset();
-  dlg.showModal();
-  dlg.onclose = () => {
-    if (dlg.returnValue !== "ok") return;
-    const quote = (s) => `'${s.replace(/'/g, `'"'"'`)}'`;
-    const goal = form.goal.value ? ` --goal ${form.goal.value}` : "";
-    runCommand(`tasks add ${form.agent.value} ${quote(form.instructions.value)}${goal}${envArg()}`);
-  };
 }
 
 $("#console-form").addEventListener("submit", (e) => {

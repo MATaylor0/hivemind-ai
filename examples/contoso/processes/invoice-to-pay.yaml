@@ -1,0 +1,17 @@
+# Invoice to pay: agents do the work, a person releases the money.
+apiVersion: hivemind/v1
+kind: Process
+name: invoice-to-pay
+display_name: Invoice to pay
+description: Codes the day's supplier invoices, has them independently reviewed, and releases payment once a person approves.
+owner: financial.controller@contoso.com
+goal: working-capital
+workflow: processes/invoice-to-pay.workflow.yaml
+triggers:
+  - name: weekday-run
+    cron: "0 10 * * 1-5"
+    time_zone: AUS Eastern Standard Time
+    input: Process all supplier invoices received since the last run.
+budget:
+  monthly_usd: 400
+  cost_center: FIN-210

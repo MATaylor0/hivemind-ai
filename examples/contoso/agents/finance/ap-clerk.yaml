@@ -17,12 +17,17 @@ tools: [erp-invoices, fabric-finance-warehouse]
 memory:
   private: true
   private_scope: agent
-  shared: [month-end-close]
 schedules:
   - name: morning-invoice-sweep
     cron: "30 7 * * 1-5"
     time_zone: AUS Eastern Standard Time
     input: Process all invoices received since the last sweep. Report what was coded, held and queued for approval.
+autonomy:
+  level: approve
+  approved_by: ap.lead@contoso.com
+  approved_on: "2026-10-01"
+evals:
+  dataset: evals/ap-clerk.jsonl
 budget:
   monthly_usd: 300
   cost_center: FIN-210

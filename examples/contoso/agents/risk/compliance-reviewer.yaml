@@ -13,6 +13,12 @@ tools: [fabric-finance-warehouse]
 knowledge: [finance-handbook]
 memory:
   private: false
+autonomy:
+  level: approve
+  approved_by: chief.risk.officer@contoso.com
+  approved_on: "2026-10-01"
+evals:
+  dataset: evals/compliance-reviewer.jsonl
 budget:
   monthly_usd: 150
   cost_center: RISK-300

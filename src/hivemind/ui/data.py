@@ -14,6 +14,7 @@ from ..loader import LoadError, Org, load_org
 from ..planner import make_plan
 from ..policy import check_org
 from ..reporting import inventory
+from ..schema import AutonomyLevel
 from ..workspace import LocalWorkspace, workspace_for
 
 
@@ -94,6 +95,7 @@ def overview(org_dir: Path, env: str | None) -> dict[str, Any]:
             "tools": len(org.tools),
             "knowledge": len(org.knowledge),
             "goals": len(org.config.goals),
+            "processes": len(org.processes),
             "errors": sum(f.level == "error" for f in findings),
             "warnings": sum(f.level == "warning" for f in findings),
             "monthly_budget_usd": budget,
@@ -190,21 +192,97 @@ def plan(org_dir: Path, env: str) -> dict[str, Any]:
     }
 
 
-def tasks(org_dir: Path, env: str, limit: int = 200) -> dict[str, Any]:
-    from ..tasks import task_store_for
+def autonomy(org_dir: Path, env: str | None) -> dict[str, Any]:
+    """Each agent's autonomy: declared vs effective level, evidence and the gate it must pass."""
+    from ..autonomy import apply, effective_level
+    from ..evals import EvalDataError, dataset_rows, gate, pass_rate
 
     try:
         org = _load(org_dir, env)
-        items = task_store_for(org).query(limit=limit)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"{type(exc).__name__}: {exc}"}
-    items = sorted(items, key=lambda t: t.created_at, reverse=True)
-    counts: dict[str, int] = {}
-    for t in items:
-        counts[t.status] = counts.get(t.status, 0) + 1
+    except LoadError as exc:
+        return {"error": str(exc)}
+    findings = check_org(org)
+    rows = []
+    for name, agent in sorted(org.agents.items()):
+        if agent.role not in org.roles:
+            continue
+        effective, capped = effective_level(org, agent)
+        try:
+            cases = len(dataset_rows(org, agent))
+        except EvalDataError:
+            cases = None
+        required = gate(org, agent)
+        tools = []
+        for tool_id in effective_tool_ids(org, agent):
+            try:
+                tools.append(resolve_tool(org, tool_id))
+            except Exception:  # noqa: BLE001 - reported by policy
+                continue
+        _, decision = apply(org, agent, tools)
+        rows.append(
+            {
+                "name": name,
+                "title": agent.title,
+                "team": agent.team or "",
+                "owner": agent.owner or "",
+                "declared": agent.autonomy.level.value,
+                "effective": effective.value,
+                "capped": capped,
+                "approved_by": agent.autonomy.approved_by or "",
+                "approved_on": agent.autonomy.approved_on or "",
+                "evidence": agent.autonomy.evidence or "",
+                "sample_rate": agent.autonomy.sample_rate,
+                "cases": cases,
+                "min_cases": required.min_cases,
+                "pass_rate": pass_rate(org, agent),
+                "gated_tools": decision.gated_tools,
+                "held_tools": decision.removed_tools,
+                "findings": [
+                    f.message
+                    for f in findings
+                    if f.subject == f"agent:{name}"
+                    and "autonomy" in f.message
+                    or f.subject == f"agent:{name}"
+                    and "eval" in f.message
+                ],
+            }
+        )
     return {
         "env": env,
-        "counts": counts,
-        "tasks": [t.to_dict() for t in items],
-        "names": {n: foundry_name(org, n) for n in org.agents},
+        "max_autonomy": org.env.max_autonomy.value if env else None,
+        "agents": rows,
+        "levels": [lvl.value for lvl in AutonomyLevel],
     }
+
+
+def processes(org_dir: Path, env: str | None) -> dict[str, Any]:
+    from ..processes import ProcessError, check_process, load_process
+
+    try:
+        org = _load(org_dir, env)
+    except LoadError as exc:
+        return {"error": str(exc)}
+    out = []
+    for name, spec in sorted(org.processes.items()):
+        item: dict[str, Any] = {
+            "name": name,
+            "title": spec.title,
+            "description": spec.description,
+            "owner": spec.owner or "",
+            "goal": org.config.goals[spec.goal].title if spec.goal in org.config.goals else (spec.goal or ""),
+            "workflow": spec.workflow,
+            "enabled": spec.enabled,
+            "triggers": [
+                {"name": t.name, "cron": t.cron, "time_zone": t.time_zone, "input": t.input} for t in spec.triggers
+            ],
+            "foundry_name": foundry_name(org, f"process-{name}"),
+        }
+        try:
+            info = load_process(org, spec)
+            item["steps"] = [{"id": s.id, "kind": s.kind, "agent": s.agent} for s in info.steps]
+            item["findings"] = [{"level": lvl, "message": msg} for lvl, msg in check_process(org, info)]
+        except ProcessError as exc:
+            item["steps"] = []
+            item["findings"] = [{"level": "error", "message": str(exc)}]
+        out.append(item)
+    return {"env": env, "processes": out}

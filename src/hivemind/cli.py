@@ -6,11 +6,18 @@ hivemind render <agent>        show the compiled instructions and Foundry defini
 hivemind inventory             list the fleet (table / markdown / json), optionally with deployed state
 hivemind budget                declared monthly budgets by team and cost centre
 hivemind new <agent>           scaffold a new agent from a role
+hivemind build -e <env>        generate the azd project (azure.yaml) for an environment
 hivemind plan  -e <env>        show what apply would change
-hivemind apply -e <env>        deploy new agent versions (and schedules) to Foundry
+hivemind apply -e <env>        deploy: `azd deploy` of the generated project (or the SDK/local provider)
+hivemind gate  -e <env>        run each agent's eval gate (pass rate for its autonomy level)
+hivemind evals add <agent>     add a golden case (e.g. a human correction) to an agent's eval dataset
+hivemind process run <name>    run a process locally (Agent Framework workflow, local agents)
 hivemind publish <agent> -e    publish an agent to Microsoft 365 Copilot and Teams
 hivemind invoke <agent> <msg>  send a message to a deployed agent
-hivemind hub serve -e <env>    run the HiveMind hub MCP server
+hivemind pause|resume <agent>  disable / enable an agent in Foundry
+hivemind identities -e <env>   deployed agents' Entra identities
+hivemind sharepoint provision  create the business-owned rules library on the HiveMind site
+hivemind ui                    local admin console in the browser
 """
 
 from __future__ import annotations
@@ -18,11 +25,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from .compiler import compile_agent, compile_org, foundry_name, shared_memory_store
+from .compiler import compile_agent, compile_org, foundry_name
 from .instructions import InstructionError, SourceResolver
 from .loader import LoadError, Org, load_org
 from .planner import apply_plan, make_plan
@@ -73,7 +81,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     errors = sum(f.level == "error" for f in findings)
     warnings = len(findings) - errors
     print(
-        f"\n{len(org.agents)} agents, {len(org.roles)} roles, {len(org.tools)} tools, "
+        f"\n{len(org.agents)} agents, {len(org.processes)} processes, {len(org.roles)} roles, {len(org.tools)} tools, "
         f"{len(org.knowledge)} knowledge sources: {errors} errors, {warnings} warnings"
     )
     return 1 if errors or (args.strict and warnings) else 0
@@ -108,7 +116,12 @@ def cmd_render(args: argparse.Namespace) -> int:
         print(build.instructions)
         print("-" * 80)
         print(f"name:     {build.name}\nmodel:    {build.definition['model']}\nhash:     {build.content_hash}")
+        print(f"autonomy: {build.autonomy.value}")
         print(f"tools:    {', '.join(t.get('server_label') or t['type'] for t in build.definition['tools'])}")
+        if build.gated_tools:
+            print(f"gated:    {', '.join(build.gated_tools)} (require approval at this autonomy level)")
+        if build.removed_tools:
+            print(f"held:     {', '.join(build.removed_tools)} (not available at this autonomy level)")
         print(f"sources:  {', '.join(build.instruction_sources)}")
     return 0
 
@@ -129,6 +142,61 @@ def cmd_budget(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_dir(org: Org, out: str | None = None) -> Path:
+    return Path(out).resolve() if out else org.root / ".hivemind" / "build" / (org.env_name or "local")
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    from .azd import build
+
+    org = _validated(args)
+    resolver = SourceResolver(org.root, offline=args.offline, workspace=workspace_for(org))
+    result = build(org, _build_dir(org, args.out), resolver, _git_sha(org.root))
+    if args.offline:
+        print("note: --offline: SharePoint and URL instruction sources were not fetched", file=sys.stderr)
+    services = result.document["services"]
+    print(f"wrote {result.azure_yaml}")
+    print(f"  {len(result.agents)} agents, {len(result.processes)} processes, {len(services)} azd services")
+    print(f"next: cd {result.root} && azd deploy --all   (or: hivemind apply -e {org.env_name})")
+    return 0
+
+
+def _run(command: list[str], cwd: Path) -> int:
+    print(f"$ {' '.join(command)}", flush=True)
+    return subprocess.run(command, cwd=cwd, check=False).returncode  # noqa: S603 - fixed executables
+
+
+def _azd_apply(org: Org, args: argparse.Namespace) -> int:
+    from .azd import build
+
+    if shutil.which("azd") is None:
+        print(
+            "azd is not installed. Install the Azure Developer CLI and its Foundry extensions:\n"
+            "  azd extension install azure.ai.agents azure.ai.projects azure.ai.routines azure.ai.evaluations\n"
+            "or set deploy_engine: sdk for this environment.",
+            file=sys.stderr,
+        )
+        return 1
+    result = build(org, _build_dir(org), SourceResolver(org.root, workspace=workspace_for(org)), _git_sha(org.root))
+    env_dir = result.root / ".azure" / org.env_name
+    if not env_dir.exists():
+        command = ["azd", "env", "new", org.env_name, "--no-prompt"]
+        for flag, var in (("--subscription", "AZURE_SUBSCRIPTION_ID"), ("--location", "AZURE_LOCATION")):
+            if os.environ.get(var):
+                command += [flag, os.environ[var]]
+        if _run(command, result.root) != 0:
+            return 1
+    # The registry azd pushes process host images to (infra output registryLoginServer).
+    registry = os.environ.get("AZURE_CONTAINER_REGISTRY_ENDPOINT")
+    if (
+        registry
+        and _run(["azd", "env", "set", "AZURE_CONTAINER_REGISTRY_ENDPOINT", registry, "-e", org.env_name], result.root)
+        != 0
+    ):
+        return 1
+    return _run(["azd", "deploy", "--all", "--no-prompt", "-e", org.env_name], result.root)
+
+
 def cmd_plan(args: argparse.Namespace, apply: bool = False) -> int:
     from .providers import provider_for
 
@@ -136,11 +204,14 @@ def cmd_plan(args: argparse.Namespace, apply: bool = False) -> int:
     builds = compile_org(org, SourceResolver(org.root, workspace=workspace_for(org)), git_sha=_git_sha(org.root))
     provider = provider_for(org)
     plan = make_plan(builds, provider.list_managed())
-    print(f"Environment: {org.env_name} ({org.env.provider})\n")
+    engine = "local" if org.env.provider == "local" else org.env.deploy_engine
+    print(f"Environment: {org.env_name} ({org.env.provider}, deploy engine: {engine})\n")
     print(plan.render())
+    if org.active_processes():
+        print(f"Processes (deployed as hosted agents by azd): {', '.join(sorted(org.active_processes()))}")
     if not apply:
         return 2 if (args.detailed_exitcode and plan.has_changes) else 0
-    if not plan.has_changes:
+    if engine != "azd" and not plan.has_changes:
         print("\nNothing to do.")
         return 0
     if not args.yes:
@@ -149,10 +220,151 @@ def cmd_plan(args: argparse.Namespace, apply: bool = False) -> int:
             print("Aborted.")
             return 1
     print()
-    shared = shared_memory_store(org)
-    if shared and provider.ensure_memory_store(shared):
-        print(f"  created shared memory store {shared.name}")
+    if engine == "azd":
+        return _azd_apply(org, args)
     apply_plan(plan, provider, prune=args.prune)
+    return 0
+
+
+def cmd_gate(args: argparse.Namespace) -> int:
+    from .evals import dataset_rows, gate, local_gate, pass_rate, regression_eval_name
+
+    org = _validated(args)
+    agents = [a for n, a in sorted(org.active_agents().items()) if not args.agent or n in args.agent]
+    deployed = None
+    if org.env.provider == "local":
+        from .providers import provider_for
+
+        provider = provider_for(org)
+        deployed = provider.list_managed()
+    passed_count = failures = skipped = 0
+    for agent in agents:
+        rows = dataset_rows(org, agent)
+        threshold = pass_rate(org, agent)
+        if not rows:
+            if gate(org, agent).min_cases:
+                print(f"FAIL  {agent.name}: no eval dataset")
+                failures += 1
+            else:
+                print(f"SKIP  {agent.name}: no golden dataset ({agent.autonomy.level.value} needs none)")
+                skipped += 1
+            continue
+        if deployed is not None:
+            if foundry_name(org, agent.name) not in deployed:
+                print(f"FAIL  {agent.name}: not deployed in '{org.env_name}' (run `hivemind apply -e {org.env_name}`)")
+                failures += 1
+                continue
+            passed, total = local_gate(org, agent, provider.invoke)
+            rate = passed / total if total else 0.0
+            ok = rate >= threshold
+            print(
+                f"{'PASS' if ok else 'FAIL'}  {agent.name}: {passed}/{total} answered (needs {threshold:.0%}; "
+                "local smoke run - quality is graded by Foundry evaluators)"
+            )
+        else:
+            command = [
+                "azd",
+                "ai",
+                "eval",
+                "run",
+                "start",
+                "--eval",
+                regression_eval_name(foundry_name(org, agent.name)),
+                "--fail-on",
+                f"pass-rate={threshold:g}",
+                "--no-prompt",
+                "-e",
+                org.env_name,
+            ]
+            if args.dry_run:
+                print(" ".join(command))
+                continue
+            ok = _run(command, _build_dir(org)) == 0
+            print(f"{'PASS' if ok else 'FAIL'}  {agent.name} (needs {threshold:.0%})")
+        passed_count += 1 if ok else 0
+        failures += 0 if ok else 1
+    if not args.dry_run:
+        print(f"\n{passed_count} passed, {failures} failed, {skipped} skipped")
+    return 1 if failures else 0
+
+
+def cmd_evals_add(args: argparse.Namespace) -> int:
+    from .evals import add_case
+
+    org = _load(args)
+    if args.agent not in org.agents:
+        print(f"unknown agent '{args.agent}'", file=sys.stderr)
+        return 1
+    path = add_case(org, org.agents[args.agent], args.query, args.expected, args.note)
+    print(f"added a case to {path.relative_to(org.root)}")
+    return 0
+
+
+def cmd_process_list(args: argparse.Namespace) -> int:
+    from .processes import ProcessError, load_process
+
+    org = _load(args)
+    for name, spec in sorted(org.processes.items()):
+        try:
+            info = load_process(org, spec)
+            steps = " -> ".join(f"{s.agent or s.kind}" for s in info.steps)
+        except ProcessError as exc:
+            steps = f"ERROR {exc}"
+        print(f"{name:24} owner={spec.owner or '-'}  {steps}")
+    return 0
+
+
+def cmd_process_run(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from .processes import LocalProcessRun
+    from .providers import provider_for
+
+    org = _validated(args)
+    if args.name not in org.processes:
+        print(f"unknown process '{args.name}'", file=sys.stderr)
+        return 1
+    if org.env.provider != "local":
+        print(
+            "process run works against local environments; deployed processes are hosted agents "
+            f"(invoke `{foundry_name(org, 'process-' + args.name)}`)",
+            file=sys.stderr,
+        )
+        return 1
+    provider = provider_for(org)
+
+    def invoke(agent: str, text: str) -> str:
+        return provider.invoke(foundry_name(org, agent), text)
+
+    def answer(prompt: str) -> str | None:
+        if args.answer is not None:
+            print(f"? {prompt}\n> {args.answer}")
+            return args.answer
+        if sys.stdin.isatty():
+            return input(f"? {prompt}\n> ")
+        return None
+
+    from .processes import ProcessError
+
+    try:
+        result = asyncio.run(LocalProcessRun(org, args.name, invoke).run(args.input, answer))
+    except ProcessError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - an agent step failed; say which, without a traceback
+        cause = exc
+        while cause.__cause__ is not None:
+            cause = cause.__cause__
+        print(f"process stopped: {exc}", file=sys.stderr)
+        if isinstance(cause, KeyError):
+            print(f"hint: deploy the agents first with `hivemind apply -e {org.env_name}`", file=sys.stderr)
+        return 1
+    for output in result.outputs:
+        print(output)
+    if result.status == "awaiting_input":
+        for request in result.requests:
+            print(f"awaiting input: {request['prompt']}")
+    print(f"[{result.status}]")
     return 0
 
 
@@ -210,6 +422,12 @@ def cmd_new(args: argparse.Namespace) -> int:
         f"  - file: instructions/agents/{args.agent}.md",
         "tools: []",
         "knowledge: []",
+        "# New agents start in shadow mode: they work alongside a person and take no actions. Promote them by",
+        "# pull request once the eval dataset shows they are ready (see docs/autonomy-and-evals.md).",
+        "autonomy:",
+        "  level: shadow",
+        "evals:",
+        f"  dataset: evals/{args.agent}.jsonl",
         "budget:",
         "  monthly_usd: 50",
     ]
@@ -220,7 +438,11 @@ def cmd_new(args: argparse.Namespace) -> int:
             "and ask for help.\n",
             encoding="utf-8",
         )
+    dataset = org.root / "evals" / f"{args.agent}.jsonl"
+    dataset.parent.mkdir(parents=True, exist_ok=True)
+    dataset.touch(exist_ok=True)
     print(f"created {spec_path.relative_to(org.root)}\ncreated {instructions.relative_to(org.root)}")
+    print(f"created {dataset.relative_to(org.root)} (add golden cases with `hivemind evals add {args.agent}`)")
     print("next: edit both files, then run `hivemind validate` and `hivemind render " + args.agent + "`")
     return 0
 
@@ -260,85 +482,12 @@ def cmd_sharepoint_provision(args: argparse.Namespace) -> int:
     return 0
 
 
-def _task_store(org: Org):
-    from .tasks import task_store_for
-
-    return task_store_for(org)
-
-
-def cmd_tasks_list(args: argparse.Namespace) -> int:
-    org = _load(args)
-    tasks = _task_store(org).query(status=args.status, assigned_to=args.agent, limit=args.limit)
-    if args.json:
-        print(json.dumps([t.to_dict() for t in tasks], indent=2))
-        return 0
-    for t in tasks:
-        parent = f" <- {t.parent_id}" if t.parent_id else ""
-        print(f"{t.id:8} {t.status:10} {t.assigned_to:22} {t.kind:10} {t.title[:60]}{parent}")
-    print(f"\n{len(tasks)} task(s)")
-    return 0
-
-
-def cmd_tasks_show(args: argparse.Namespace) -> int:
-    task = _task_store(_load(args)).get(args.task_id)
-    if task is None:
-        print(f"task '{args.task_id}' not found", file=sys.stderr)
-        return 1
-    print(json.dumps(task.to_dict(), indent=2))
-    return 0
-
-
-def cmd_tasks_add(args: argparse.Namespace) -> int:
-    from .tasks import Task
-
-    org = _load(args)
-    if args.agent not in org.active_agents():
-        print(f"unknown or inactive agent '{args.agent}'", file=sys.stderr)
-        return 1
-    if args.goal and args.goal not in org.config.goals:
-        print(f"unknown goal '{args.goal}'", file=sys.stderr)
-        return 1
-    task = _task_store(org).create(
-        Task(
-            title=args.title or args.instructions.splitlines()[0][:120],
-            instructions=args.instructions,
-            assigned_to=args.agent,
-            requested_by=args.requested_by or os.environ.get("USER", "cli"),
-            requester_kind="person",
-            goal=args.goal,
-            depth=0,
-        )
-    )
-    print(f"created {task.id} for {task.assigned_to}")
-    return 0
-
-
-def cmd_tasks_run(args: argparse.Namespace) -> int:
-    """Work the queue once, in this process (local environments and troubleshooting)."""
-    from .hub.server import build_service
-    from .hub.worker import TaskRunner
-
-    runner = TaskRunner(build_service(_validated(args)))
-    count = runner.run_pending()
-    delivered = runner.deliver_follow_ups()
-    print(f"ran {count} task(s), delivered {delivered} follow-up(s)")
-    return 0
-
-
 def cmd_ui(args: argparse.Namespace) -> int:
     from .ui.server import serve
 
     org = _load(args, env=None)
     env = args.env or next((n for n, e in org.config.environments.items() if e.provider == "local"), None)
     serve(org.root, port=args.port, env=env, open_browser=not args.no_browser)
-    return 0
-
-
-def cmd_hub_serve(args: argparse.Namespace) -> int:
-    from .hub.server import serve
-
-    org = _validated(args)
-    serve(org, host=args.host, port=args.port, insecure=args.insecure)
     return 0
 
 
@@ -389,6 +538,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--description")
     p.set_defaults(func=cmd_new, env=None)
 
+    p = sub.add_parser("build", help="generate the azd project (azure.yaml) for an environment")
+    with_env(p, True)
+    p.add_argument("--out", help="output directory (default: <org>/.hivemind/build/<env>)")
+    p.add_argument("--offline", action="store_true", help="skip SharePoint/URL sources (dry runs and CI checks)")
+    p.set_defaults(func=cmd_build)
+
     for name, apply in (("plan", False), ("apply", True)):
         p = sub.add_parser(name, help=f"{name} deployment to an environment")
         with_env(p, True)
@@ -399,6 +554,32 @@ def build_parser() -> argparse.ArgumentParser:
         else:
             p.add_argument("--detailed-exitcode", action="store_true", help="exit 2 when there are changes")
             p.set_defaults(func=cmd_plan)
+
+    p = sub.add_parser("gate", help="run eval gates: each agent's pass rate for its autonomy level")
+    with_env(p, True)
+    p.add_argument("--agent", action="append", help="limit to these agents (repeatable)")
+    p.add_argument("--dry-run", action="store_true", help="print the azd commands instead of running them")
+    p.set_defaults(func=cmd_gate)
+
+    evals = sub.add_parser("evals", help="eval datasets")
+    evals_sub = evals.add_subparsers(dest="evals_command", required=True)
+    p = evals_sub.add_parser("add", help="add a golden case to an agent's dataset")
+    p.add_argument("agent")
+    p.add_argument("--query", required=True)
+    p.add_argument("--expected")
+    p.add_argument("--note", help="where the case came from, e.g. 'correction by ap.lead, 12 Oct'")
+    p.set_defaults(func=cmd_evals_add, env=None)
+
+    proc = sub.add_parser("process", help="processes (Agent Framework workflows run by agents)")
+    proc_sub = proc.add_subparsers(dest="process_command", required=True)
+    p = proc_sub.add_parser("list", help="list processes and their steps")
+    p.set_defaults(func=cmd_process_list, env=None)
+    p = proc_sub.add_parser("run", help="run a process locally")
+    p.add_argument("name")
+    p.add_argument("input")
+    p.add_argument("--answer", help="answer every human step with this text (e.g. 'approved')")
+    with_env(p, True)
+    p.set_defaults(func=cmd_process_run)
 
     p = sub.add_parser("publish", help="publish an agent to Microsoft 365 Copilot and Teams")
     p.add_argument("agent")
@@ -423,34 +604,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("sharepoint", help="HiveMind SharePoint site")
     sp_sub = sp.add_subparsers(dest="sharepoint_command", required=True)
-    p = sp_sub.add_parser("provision", help="create/update the rules and outputs libraries and the tasks list")
+    p = sp_sub.add_parser("provision", help="create/update the rules library and a folder per org/role/team/agent")
     with_env(p, True)
     p.set_defaults(func=cmd_sharepoint_provision)
-
-    tasks = sub.add_parser("tasks", help="the task queue")
-    tasks_sub = tasks.add_subparsers(dest="tasks_command", required=True)
-    p = tasks_sub.add_parser("list", help="list tasks")
-    with_env(p, True)
-    p.add_argument("--status", choices=["Queued", "InProgress", "Done", "Failed", "Cancelled"])
-    p.add_argument("--agent")
-    p.add_argument("--limit", type=int, default=50)
-    p.add_argument("--json", action="store_true")
-    p.set_defaults(func=cmd_tasks_list)
-    p = tasks_sub.add_parser("show", help="show one task")
-    p.add_argument("task_id")
-    with_env(p, True)
-    p.set_defaults(func=cmd_tasks_show)
-    p = tasks_sub.add_parser("add", help="give an agent a task (as a person)")
-    p.add_argument("agent")
-    p.add_argument("instructions")
-    p.add_argument("--title")
-    p.add_argument("--goal")
-    p.add_argument("--requested-by")
-    with_env(p, True)
-    p.set_defaults(func=cmd_tasks_add)
-    p = tasks_sub.add_parser("run", help="work the queue once in this process")
-    with_env(p, True)
-    p.set_defaults(func=cmd_tasks_run)
 
     p = sub.add_parser("ui", help="open the local admin console (org views + a console for these commands)")
     p.add_argument("-e", "--env", help="environment selected when the console opens (default: the local one)")
@@ -458,19 +614,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(func=cmd_ui)
 
-    hub = sub.add_parser("hub", help="HiveMind hub")
-    hub_sub = hub.add_subparsers(dest="hub_command", required=True)
-    p = hub_sub.add_parser("serve", help="run the hub MCP server")
-    with_env(p, True)
-    p.add_argument("--host", default="0.0.0.0")
-    p.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
-    p.add_argument("--insecure", action="store_true", help="key auth without HIVEMIND_HUB_KEY (dev only)")
-    p.set_defaults(func=cmd_hub_serve)
-
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    import logging
+
+    logging.getLogger("azure.identity").setLevel(logging.ERROR)  # sign-in failures are reported once, below
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args) or 0)

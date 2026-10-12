@@ -34,6 +34,7 @@ class InventoryRow:
     monthly_budget_usd: float | None
     cost_center: str
     enabled: bool
+    autonomy: str = ""
     deployed_version: str = ""
     status: str = ""
 
@@ -64,6 +65,7 @@ def inventory(org: Org, deployed: dict[str, DeployedAgent] | None = None) -> lis
             monthly_budget_usd=agent.budget.monthly_usd,
             cost_center=agent.budget.cost_center or "",
             enabled=name in active,
+            autonomy=agent.autonomy.level.value,
         )
         if deployed is not None:
             current = deployed.get(foundry_name(org, name))
@@ -76,7 +78,7 @@ def inventory(org: Org, deployed: dict[str, DeployedAgent] | None = None) -> lis
 def render_inventory(rows: list[InventoryRow], fmt: str = "table") -> str:
     if fmt == "json":
         return json.dumps([asdict(r) for r in rows], indent=2)
-    headers = ["Agent", "Tier", "Team", "Reports to", "Owner", "Model", "Tools", "Budget/mo", "Status"]
+    headers = ["Agent", "Tier", "Team", "Autonomy", "Reports to", "Owner", "Model", "Tools", "Budget/mo", "Status"]
 
     def cells(r: InventoryRow) -> list[str]:
         tools = f"{len(r.tools)}" + (f" ({len(r.write_tools)} write)" if r.write_tools else "")
@@ -84,7 +86,18 @@ def render_inventory(rows: list[InventoryRow], fmt: str = "table") -> str:
         status = r.status or ("enabled" if r.enabled else "disabled")
         if r.deployed_version:
             status += f" v{r.deployed_version}"
-        return [r.name, r.tier, r.team or "-", r.reports_to or "-", r.owner or "-", r.model, tools, budget, status]
+        return [
+            r.name,
+            r.tier,
+            r.team or "-",
+            r.autonomy,
+            r.reports_to or "-",
+            r.owner or "-",
+            r.model,
+            tools,
+            budget,
+            status,
+        ]
 
     table = [headers] + [cells(r) for r in rows]
     if fmt == "markdown":

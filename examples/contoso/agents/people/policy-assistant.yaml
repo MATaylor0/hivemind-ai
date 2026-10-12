@@ -18,6 +18,9 @@ channels:
     enabled: true
     scope: tenant
     short_description: Ask anything about Contoso policies.
+autonomy:
+  level: shadow
+  # Piloting: answers are compared with the People team's before going live.
 budget:
   monthly_usd: 100
   cost_center: PPL-400

@@ -41,36 +41,14 @@ goals:
   employee-experience:
     title: Employees get clear policy answers in under a minute
 
-# The HiveMind SharePoint site: business-owned rules (Word documents), agent outputs and the task queue.
+# The HiveMind SharePoint site: business-owned rules (Word documents) for every agent.
 # Create it with `hivemind sharepoint provision -e <env>`.
 sharepoint:
   site: contoso.sharepoint.com/sites/HiveMind
-  output_format: docx
 
-# Shared organisational memory (enforced by the hub). `org` and `team:<team>` scopes are implicit.
+# Models for each agent's private long-term memory (Foundry memory stores).
 memory:
-  store: hivemind-memory
-  backend: foundry
   embedding_model: text-embedding-3-small
-  scopes:
-    month-end-close:
-      description: Status, blockers and decisions for the current month-end close.
-      read: ["team:finance", "tier:executive", "team:risk"]
-      write: ["team:finance"]
-
-hub:
-  enabled: true
-  # Foundry connection using the agents' Microsoft Entra identity (agentic identity) to call the hub.
-  connection: hivemind-hub
-  auth: entra
-  audience: ${env:HIVEMIND_HUB_AUDIENCE:-api://hivemind-hub}
-  tenant_id: ${env:AZURE_TENANT_ID:-}
-  max_delegation_depth: 4
-  tasks:
-    backend: sharepoint             # the "Agent Tasks" list on the HiveMind site
-    workers: 4
-    wait_seconds: 45
-    max_tasks_per_request: 30
 
 models:
   allowed: [gpt-5, gpt-5-mini, gpt-4.1]
@@ -84,6 +62,17 @@ policies:
   require_budget: true
   require_reviewer_for_write_tools: true
   max_hierarchy_depth: 5
+  # Loop engineering: Foundry evaluators score each agent's golden dataset (the promotion gate) and a sample of
+  # its production traces. Gates set the evidence needed for each autonomy level.
+  evals:
+    evaluators: [builtin.task_adherence, builtin.intent_resolution]
+    judge_model: gpt-5-mini
+    gates:
+      shadow:             {min_cases: 0,  pass_rate: 0.0}
+      suggest:            {min_cases: 5,  pass_rate: 0.7}
+      approve:            {min_cases: 10, pass_rate: 0.8,  require_approver: true}
+      autonomous:         {min_cases: 30, pass_rate: 0.95, require_approver: true}
+      autonomous_sampled: {min_cases: 30, pass_rate: 0.95, require_approver: true}
 
 environments:
   local:
@@ -100,9 +89,12 @@ environments:
       WORK_IQ_MAIL_URL: https://localhost/work-iq-mail
   dev:
     provider: foundry
+    deploy_engine: azd               # hivemind apply = generate azure.yaml + azd deploy --all
     endpoint: ${env:FOUNDRY_ENDPOINT_DEV}
     name_prefix: dev-
-    hub_url: ${env:HIVEMIND_HUB_URL_DEV:-https://hivemind-hub-dev.example.azurecontainerapps.io/mcp}
+    model_deployments:
+      - {name: gpt-5-mini, model: gpt-5-mini, version: "2025-08-07", capacity: 50}
+      - {name: text-embedding-3-small, model: text-embedding-3-small, version: "1", sku: Standard, capacity: 50}
     model_overrides:
       gpt-5: gpt-5-mini             # keep dev cheap
     variables:
@@ -118,7 +110,11 @@ environments:
     provider: foundry
     protected: true                 # changes only via pull request + the approval-gated deploy workflow
     endpoint: ${env:FOUNDRY_ENDPOINT_PROD}
-    hub_url: ${env:HIVEMIND_HUB_URL_PROD:-https://hivemind-hub.example.azurecontainerapps.io/mcp}
+    max_autonomy: approve           # nothing runs unsupervised in production until the pilot is signed off
+    model_deployments:
+      - {name: gpt-5, model: gpt-5, version: "2025-08-07", capacity: 100}
+      - {name: gpt-5-mini, model: gpt-5-mini, version: "2025-08-07", capacity: 200}
+      - {name: text-embedding-3-small, model: text-embedding-3-small, version: "1", sku: Standard, capacity: 100}
     variables:
       FABRIC_MCP_URL: https://api.fabric.microsoft.com/v1/mcp/workspaces/finance
       ERP_MCP_URL: https://erp-mcp.contoso.com/mcp

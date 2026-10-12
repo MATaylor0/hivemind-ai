@@ -11,8 +11,12 @@ goals: [fy27-margin]
 instructions:
   - file: instructions/agents/fpa-analyst.md
 tools: [fabric-finance-warehouse, fabric-sales-agent, code-interpreter]
-memory:
-  shared: [month-end-close]
+autonomy:
+  level: approve
+  approved_by: fpa.lead@contoso.com
+  approved_on: "2026-10-01"
+evals:
+  dataset: evals/fpa-analyst.jsonl
 budget:
   monthly_usd: 200
   cost_center: FIN-220

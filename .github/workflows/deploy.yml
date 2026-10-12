@@ -1,63 +1,34 @@
-# Deploys an org directory to a Foundry environment, then refreshes the HiveMind SharePoint site.
-# Authentication uses GitHub OIDC federated credentials - no secrets stored in the repo. The identity needs
-# the "Azure AI User" role (or higher) on the Foundry project, plus permission to read project connections, and
-# Sites.Selected (write) on the HiveMind SharePoint site.
+# Deploys the agent workforce: dev first; production only if every agent passed its eval gate in dev, and then
+# behind the 'prod' GitHub environment's required reviewers.
+#
+#   hivemind apply  -> generates azure.yaml (agents, routines, evals, process hosts) and runs `azd deploy --all`
+#   hivemind gate   -> `azd ai eval run start --fail-on pass-rate=<n>` per agent (threshold from its autonomy level)
 name: Deploy agents
 
 on:
+  push:
+    branches: [main]
+    paths: ["examples/**", "orgs/**", ".github/workflows/deploy*.yml"]
   workflow_dispatch:
     inputs:
-      environment:
-        description: Environment in hivemind.yaml
-        required: true
-        default: dev
-        type: choice
-        options: [dev, prod]
-      org:
-        description: Org directory
-        required: true
-        default: examples/contoso
-      apply:
-        description: Apply the plan (otherwise plan only)
+      promote:
+        description: Promote to prod after dev passes its gates
         type: boolean
-        default: false
+        default: true
 
 permissions:
   id-token: write
   contents: read
 
-concurrency:
-  group: deploy-${{ inputs.environment }}
-  cancel-in-progress: false
-
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    # GitHub environments give you required reviewers for prod and per-environment variables.
-    environment: ${{ inputs.environment }}
-    env:
-      FOUNDRY_ENDPOINT_DEV: ${{ vars.FOUNDRY_ENDPOINT_DEV }}
-      FOUNDRY_ENDPOINT_PROD: ${{ vars.FOUNDRY_ENDPOINT_PROD }}
-      HIVEMIND_HUB_URL_DEV: ${{ vars.HIVEMIND_HUB_URL_DEV }}
-      HIVEMIND_HUB_URL_PROD: ${{ vars.HIVEMIND_HUB_URL_PROD }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install ".[azure]"
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Validate
-        run: hivemind --org "${{ inputs.org }}" validate -e "${{ inputs.environment }}"
-      - name: Plan
-        run: hivemind --org "${{ inputs.org }}" plan -e "${{ inputs.environment }}" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Apply
-        if: ${{ inputs.apply }}
-        run: hivemind --org "${{ inputs.org }}" apply -e "${{ inputs.environment }}" --yes
-      - name: Update SharePoint site (folders for new agents, task list drop-down)
-        if: ${{ inputs.apply }}
-        run: hivemind --org "${{ inputs.org }}" sharepoint provision -e "${{ inputs.environment }}"
+  dev:
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: dev
+
+  prod:
+    needs: dev
+    if: github.event_name == 'push' || inputs.promote
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: prod

@@ -6,7 +6,8 @@ Composition order (general to specific, so later layers refine earlier ones):
   2. Role           - the role archetype's instructions (how a manager / reviewer / worker behaves).
   3. Team           - the team's instructions (domain context shared by the team).
   4. Agent          - the agent's own instructions (its specific job).
-  5. Generated      - goals, position in the org chart, colleagues, tools and knowledge, hub etiquette.
+  5. Generated      - operating mode (autonomy), goals, processes, position in the org chart, tools and
+                      knowledge, when to stop and escalate.
 
 Fragments can live in the repo (``file:``), in SharePoint (``sharepoint:``) so business owners can edit
 them without a pull request, at a URL, or inline. When the org has a HiveMind SharePoint site, every document
@@ -25,7 +26,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .access import memory_access
 from .docx import docx_to_markdown
 from .graph import GraphClient, GraphError
 from .hierarchy import OrgChart
@@ -80,8 +80,11 @@ class SourceResolver:
         if folder not in self._rules:
             try:
                 self._rules[folder] = self.workspace.rules(folder)
-            except GraphError as exc:
-                raise InstructionError(f"could not read rules folder '{folder}': {exc}") from exc
+            except Exception as exc:  # noqa: BLE001 - Graph, network and sign-in failures all stop the build
+                raise InstructionError(
+                    f"could not read SharePoint rules folder '{folder}': {str(exc).splitlines()[0]} "
+                    "(sign in with `az login`, or use --offline to build without SharePoint rules)"
+                ) from exc
         return self._rules[folder]
 
     def _fetch(self, source: InstructionSource) -> str:
@@ -170,7 +173,7 @@ def org_position_section(org: Org, agent: AgentSpec) -> str:
         lines.append(f"\nYou report to:\n{_bullet(manager)}")
     reports = chart.reports(agent.name)
     if reports:
-        lines.append("\nYour direct reports (delegate work that matches their remit):")
+        lines.append("\nYour direct reports:")
         lines.extend(_bullet(r) for r in reports)
     reviewer = chart.reviewer(agent.name)
     if reviewer:
@@ -181,55 +184,41 @@ def org_position_section(org: Org, agent: AgentSpec) -> str:
         lines.extend(_bullet(r) for r in reviewees)
     collaborators = chart.collaborators(agent.name)
     if collaborators:
-        lines.append("\nColleagues you can hand work to directly:")
+        lines.append("\nColleagues you work closely with:")
         lines.extend(_bullet(c) for c in collaborators)
     return "\n".join(lines)
 
 
-def hub_section(org: Org, agent: AgentSpec) -> str:
-    if not org.config.hub.enabled:
+def processes_section(org: Org, agent: AgentSpec) -> str:
+    from .processes import processes_for_agent
+
+    lines = []
+    for info in processes_for_agent(org, agent.name):
+        steps = ", ".join(f"`{s.id}`" for s in info.steps if s.agent == agent.name)
+        goal = f" (goal: {org.config.goals[info.spec.goal].title})" if info.spec.goal in org.config.goals else ""
+        lines.append(f"- **{info.spec.title}**{goal}: {info.spec.description.strip()} You run step(s) {steps}.")
+    if not lines:
         return ""
+    return (
+        "You take part in these processes. When a message comes from a process step, do that step's job "
+        "completely, and say plainly if you could not, so the process can route the work to a person:\n"
+        + "\n".join(lines)
+    )
+
+
+def escalation_section(org: Org, agent: AgentSpec) -> str:
     chart = OrgChart(org.active_agents())
-    rules = [
-        "You are connected to the HiveMind hub (the `hivemind` tools). Work between agents is tracked as tasks "
-        "in a shared queue that people can also see. Use the tools as follows:",
+    manager = chart.manager(agent.name)
+    owner = agent.owner or "your owner"
+    lines = [
+        "Stop and hand back to a person, rather than guessing, when a request is outside your job, needs "
+        "authority you don't have, conflicts with policy, or you are not confident in the answer.",
+        "Say clearly what you did, what is left, why you stopped, and who should take it from here:",
     ]
-    if chart.delegation_targets(agent.name):
-        rules.append(
-            "- `delegate_task`: hand a well-scoped task, with the context the colleague needs, to a direct report "
-            "or collaborator. Quick tasks return the answer; longer ones return a task id and the result comes "
-            "back to you later as a new task."
-        )
-    if chart.manager(agent.name):
-        rules.append(
-            "- `escalate`: when a request is outside your remit, needs authority you do not have, or you are blocked."
-        )
-    if chart.reviewer(agent.name):
-        rules.append("- `request_review`: before any irreversible or externally visible action, and for final outputs.")
-    rules.append("- `check_task` / `my_tasks`: follow up on work you delegated or were given.")
-    if org.config.sharepoint:
-        rules.append(
-            "- `save_output`: save a finished document (report, briefing, analysis) to the team's SharePoint "
-            "library and share the returned link instead of pasting long content."
-        )
-    rules.append(
-        "- `recall` / `remember`: shared organisational memory. Recall before starting work; remember durable "
-        "facts, decisions and outcomes others will need. Never store secrets or personal data you were not "
-        "asked to keep."
-    )
-    rules.append("- `list_colleagues`: discover who else in the organisation can help.")
-    rules.append(
-        "\nWhen a message starts with `[Task T-… from …]`, you are working on that task: the hub records your "
-        "final answer as its result, so make the answer complete and self-contained."
-    )
-    scopes = memory_access(org, agent.name)
-    if scopes:
-        rules.append("\nShared memory scopes available to you:")
-        for access in scopes.values():
-            mode = "read/write" if access.read and access.write else ("read" if access.read else "write")
-            desc = f" - {access.description}" if access.description else ""
-            rules.append(f"- `{access.scope}` ({mode}){desc}")
-    return "\n".join(rules)
+    if manager:
+        lines.append(f"- for decisions outside your remit: the {manager.title} (`{manager.name}`) and its owner")
+    lines.append(f"- for problems with how you work: {owner}")
+    return "\n".join(lines)
 
 
 def capabilities_section(tools: list[ToolDef]) -> str:
@@ -263,7 +252,7 @@ def goals_section(org: Org, agent: AgentSpec) -> str:
     return "\n".join(lines)
 
 
-def compose(org: Org, agent: AgentSpec, tools: list[ToolDef], fetch: Fetcher) -> ComposedInstructions:
+def compose(org: Org, agent: AgentSpec, tools: list[ToolDef], fetch: Fetcher, mode: str = "") -> ComposedInstructions:
     role = org.roles[agent.role]
     team = org.config.teams.get(agent.team) if agent.team else None
     used: list[str] = []
@@ -281,9 +270,11 @@ def compose(org: Org, agent: AgentSpec, tools: list[ToolDef], fetch: Fetcher) ->
         if agent.team
         else "",
         _section("Your job", _fragments(agent.instructions, fetch, used, folders.get("agent"))),
+        _section("Operating mode", mode),
         _section("Goals", goals_section(org, agent)),
+        _section("Processes", processes_section(org, agent)),
         _section("Your position in the organisation", org_position_section(org, agent)),
         _section("Tools and knowledge", capabilities_section(tools)),
-        _section("Working with other agents", hub_section(org, agent)),
+        _section("When to stop and escalate", escalation_section(org, agent)),
     ]
     return ComposedInstructions(text="\n\n".join(s for s in sections if s).strip() + "\n", sources=used)

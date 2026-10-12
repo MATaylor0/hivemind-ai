@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hivemind-ai"
-version = "0.1.0"
-description = "Agents-as-code framework for provisioning, connecting and governing a fleet of Microsoft Foundry agents."
+version = "0.3.0"
+description = "Operating model for an AI-native workforce on Microsoft Foundry: agents as code, graduated autonomy, eval gates and processes."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -21,15 +21,14 @@ azure = [
   "azure-identity>=1.17",
   "openai>=1.60",
 ]
-# Run the HiveMind Hub (shared memory + delegation MCP server).
-hub = [
-  "mcp>=2.2",
-  "uvicorn>=0.30",
-  "PyJWT[crypto]>=2.8",
+# Run processes (Agent Framework declarative workflows) locally with `hivemind process run`.
+processes = [
+  "agent-framework-declarative>=1.2,<2",
 ]
 dev = [
   "pytest>=8",
   "ruff>=0.5",
+  "jsonschema>=4.20",
 ]
 
 [project.scripts]

@@ -50,9 +50,3 @@ def test_plan_apply_local(org_dir, capsys):
     assert "6 unchanged" in capsys.readouterr().out
     assert main(["--org", str(org_dir), "inventory", "-e", "local", "--format", "markdown"]) == 0
     assert "deployed v1" in capsys.readouterr().out
-
-
-def test_apply_creates_shared_memory_store(org_dir):
-    assert main(["--org", str(org_dir), "apply", "-e", "local", "--yes"]) == 0
-    state = json.loads((org_dir / ".hivemind" / "local" / "state.json").read_text())
-    assert "hivemind-memory" in state["memory_stores"]

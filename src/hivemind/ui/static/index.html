@@ -21,8 +21,9 @@
     <a href="#/overview" data-view="overview">Overview</a>
     <a href="#/chart" data-view="chart">Org chart</a>
     <a href="#/agents" data-view="agents">Agents</a>
+    <a href="#/autonomy" data-view="autonomy">Autonomy</a>
+    <a href="#/processes" data-view="processes">Processes</a>
     <a href="#/plan" data-view="plan">Plan</a>
-    <a href="#/tasks" data-view="tasks">Tasks</a>
   </nav>
 
   <main id="main" tabindex="-1"><p class="empty">Loading…</p></main>
@@ -37,7 +38,7 @@
     <pre class="console-out" id="console-out" aria-live="polite"></pre>
     <form class="console-in" id="console-form" autocomplete="off">
       <label for="console-input">hivemind ›</label>
-      <input id="console-input" spellcheck="false" placeholder="validate · tree · plan -e local · tasks list -e local · --help">
+      <input id="console-input" spellcheck="false" placeholder="validate · tree · plan -e local · gate -e local · process list · --help">
     </form>
   </section>
 
@@ -49,18 +50,6 @@
     </div>
   </dialog>
 
-  <dialog id="task-dialog">
-    <form class="stack" id="task-form" method="dialog">
-      <strong>Give an agent a task</strong>
-      <label>Agent <select name="agent" required></select></label>
-      <label>Instructions <textarea name="instructions" rows="4" required></textarea></label>
-      <label>Goal (optional) <select name="goal"><option value="">—</option></select></label>
-      <div class="actions">
-        <button value="cancel" formnovalidate>Cancel</button>
-        <button value="ok" class="primary">Create task</button>
-      </div>
-    </form>
-  </dialog>
 
   <script src="/static/app.js"></script>
 </body>

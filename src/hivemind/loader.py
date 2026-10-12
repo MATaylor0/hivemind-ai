@@ -8,6 +8,8 @@ Layout (every directory is optional except ``hivemind.yaml`` and ``agents/``)::
       catalog/knowledge/*.yaml   # KnowledgeDef
       roles/*.yaml               # RoleDef
       agents/**/*.yaml           # AgentSpec (sub-folders per team are fine)
+      processes/*.yaml           # ProcessSpec, next to its Agent Framework workflow (*.workflow.yaml)
+      evals/**                   # golden datasets (JSONL) referenced by agents' `evals.dataset`
       instructions/**            # markdown referenced by `file:` sources
 
 String values may reference ``${env:NAME}`` (process environment) and ``${var:NAME}`` (the selected
@@ -26,7 +28,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from .schema import AgentSpec, Environment, KnowledgeDef, OrgConfig, RoleDef, ToolDef
+from .schema import AgentSpec, Environment, KnowledgeDef, OrgConfig, ProcessSpec, RoleDef, ToolDef
 
 _PLACEHOLDER = re.compile(r"\$\{(env|var):([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
@@ -43,6 +45,7 @@ class Org:
     knowledge: dict[str, KnowledgeDef] = field(default_factory=dict)
     roles: dict[str, RoleDef] = field(default_factory=dict)
     agents: dict[str, AgentSpec] = field(default_factory=dict)
+    processes: dict[str, ProcessSpec] = field(default_factory=dict)
     env_name: str | None = None
     sources: dict[str, Path] = field(default_factory=dict)  # "<Model>:<id>" -> file it came from
 
@@ -59,6 +62,9 @@ class Org:
     def active_agents(self) -> dict[str, AgentSpec]:
         disabled = set(self.env.disabled_agents)
         return {n: a for n, a in self.agents.items() if a.enabled and n not in disabled}
+
+    def active_processes(self) -> dict[str, ProcessSpec]:
+        return {n: p for n, p in self.processes.items() if p.enabled}
 
 
 def substitute(value: Any, variables: dict[str, str], strict: bool, problems: list[str], where: str) -> Any:
@@ -141,6 +147,8 @@ def load_org(root: str | Path, env: str | None = None) -> Org:
                 continue
             items = data if isinstance(data, list) else [data]
             for item in items:
+                if isinstance(item, dict) and item.get("kind") == "Workflow":
+                    continue  # Agent Framework workflow files live next to their process specs
                 item = substitute(item, variables, strict, problems, str(path))
                 try:
                     obj = model.model_validate(item)
@@ -159,6 +167,7 @@ def load_org(root: str | Path, env: str | None = None) -> Org:
     load_many("catalog/knowledge", KnowledgeDef, org.knowledge, "id")
     load_many("roles", RoleDef, org.roles, "id")
     load_many("agents", AgentSpec, org.agents, "name")
+    load_many("processes", ProcessSpec, org.processes, "name")
 
     clash = set(org.tools) & set(org.knowledge)
     if clash:

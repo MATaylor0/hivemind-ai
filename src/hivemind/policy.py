@@ -8,10 +8,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from .autonomy import effective_level
 from .compiler import effective_tool_ids, resolve_model
+from .evals import EvalDataError, dataset_rows, gate
 from .hierarchy import OrgChart, audience_allows
 from .loader import Org
-from .schema import Tier
+from .processes import ProcessError, check_process, load_process
+from .schema import AutonomyLevel, Tier
 
 Level = Literal["error", "warning"]
 
@@ -54,9 +57,6 @@ def check_org(org: Org) -> list[Finding]:
             if ref not in org.tools and ref not in org.knowledge:
                 error(f"role:{role.id}", f"references unknown tool/knowledge '{ref}'")
 
-    if cfg.hub.enabled and org.env_name and org.env.provider == "foundry" and not (org.env.hub_url or cfg.hub.url):
-        error("hivemind.yaml", f"hub is enabled but no hub URL is set for environment '{org.env_name}'")
-
     for goal_id, goal in cfg.goals.items():
         if goal.parent and goal.parent not in cfg.goals:
             error(f"goal:{goal_id}", f"parent '{goal.parent}' is not a defined goal")
@@ -67,14 +67,6 @@ def check_org(org: Org) -> list[Finding]:
                 break
             seen.add(current)
             current = cfg.goals[current].parent
-
-    if cfg.hub.enabled and cfg.hub.tasks.backend == "sharepoint" and cfg.sharepoint is None:
-        error("hivemind.yaml", "hub.tasks.backend is 'sharepoint' but there is no 'sharepoint' section")
-    if cfg.hub.enabled and cfg.hub.auth == "entra" and org.env_name and org.env.provider == "foundry":
-        if not cfg.hub.audience:
-            error("hivemind.yaml", "hub.auth is 'entra' but hub.audience is not set")
-        if not cfg.hub.connection:
-            error("hivemind.yaml", "hub.auth is 'entra' but hub.connection (an agentic identity connection) is not set")
 
     for cycle in chart.find_cycles():
         error("org chart", f"reporting cycle: {' -> '.join(cycle)}")
@@ -133,16 +125,20 @@ def check_org(org: Org) -> list[Finding]:
                 continue
             if not audience_allows(tool.audience, agent, tier):
                 error(subject, f"not in the audience of '{ref}' ({', '.join(tool.audience)})")
+            # Below 'autonomous', the compiler gates or removes write tools. Fully autonomous agents need some other
+            # form of oversight: a reviewer, sampled review, or approval on the tool itself.
             if (
                 tool.access == "write"
                 and policies.require_reviewer_for_write_tools
+                and agent.autonomy.level == AutonomyLevel.AUTONOMOUS
                 and not agent.reviewed_by
                 and tool.require_approval != "always"
                 and not (isinstance(tool.require_approval, dict) and tool.require_approval.get("always"))
             ):
                 error(
                     subject,
-                    f"write tool '{ref}' needs a reviewer (reviewed_by) or require_approval: always",
+                    f"autonomous with write tool '{ref}': add a reviewer (reviewed_by), use autonomous_sampled, "
+                    "or set require_approval on the tool",
                 )
 
         user_tools = [ref for ref in effective_tool_ids(org, agent) if _user_context(org, ref)]
@@ -159,12 +155,7 @@ def check_org(org: Org) -> list[Finding]:
                 "(channels.m365) or remove them",
             )
 
-        for scope in agent.memory.shared:
-            definition = cfg.memory.scopes.get(scope)
-            if definition is None:
-                error(subject, f"memory scope '{scope}' is not defined under memory.scopes")
-            elif not audience_allows([*definition.read, *definition.write], agent, tier):
-                error(subject, f"not permitted to use memory scope '{scope}'")
+        _check_autonomy_and_evals(org, agent, error, warn)
 
         if agent.memory.private and agent.memory.private_scope == "agent" and agent.channels.m365.enabled:
             warn(
@@ -185,7 +176,49 @@ def check_org(org: Org) -> list[Finding]:
             if len(prefixed) > 63:
                 error(subject, f"name with environment prefix '{prefixed}' exceeds 63 characters")
 
+    for name, process in sorted(org.processes.items()):
+        if not process.enabled:
+            continue
+        try:
+            info = load_process(org, process)
+        except ProcessError as exc:
+            error(f"process:{name}", str(exc))
+            continue
+        for level, message in check_process(org, info):
+            (error if level == "error" else warn)(f"process:{name}", message)
+        names = [t.name for t in process.triggers]
+        if len(names) != len(set(names)):
+            error(f"process:{name}", "trigger names must be unique")
+
+    clash = set(org.agents) & {f"process-{p}" for p in org.processes}
+    if clash:
+        error("org", f"agent names clash with process host names: {', '.join(sorted(clash))}")
+
     return findings
+
+
+def _check_autonomy_and_evals(org: Org, agent, error, warn) -> None:  # noqa: ANN001 - local reporters
+    subject = f"agent:{agent.name}"
+    level = agent.autonomy.level
+    required = gate(org, agent)
+    if level == AutonomyLevel.AUTONOMOUS_SAMPLED and not agent.autonomy.sample_rate:
+        error(subject, "autonomous_sampled needs autonomy.sample_rate (share of runs reviewed by people)")
+    if required.require_approver and not agent.autonomy.approved_by:
+        error(subject, f"autonomy '{level.value}' needs autonomy.approved_by (who signed off this level)")
+    try:
+        rows = dataset_rows(org, agent)
+    except EvalDataError as exc:
+        error(subject, str(exc))
+        return
+    if len(rows) < required.min_cases:
+        error(
+            subject,
+            f"autonomy '{level.value}' needs an eval dataset with at least {required.min_cases} cases "
+            f"(evals.dataset has {len(rows)})",
+        )
+    effective, capped = effective_level(org, agent)
+    if capped and org.env_name:
+        warn(subject, f"autonomy '{level.value}' is capped to '{effective.value}' in environment '{org.env_name}'")
 
 
 def _user_context(org: Org, ref: str) -> bool:

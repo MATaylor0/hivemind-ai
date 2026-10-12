@@ -1,7 +1,7 @@
 """Minimal Word (.docx) support so business users never have to touch markdown.
 
 * ``docx_to_markdown`` - read rules written in Word: headings, paragraphs, bullet/numbered lists, bold/italic.
-* ``markdown_to_docx`` - write agent outputs as Word documents with the same subset.
+* ``markdown_to_docx`` - write Word documents (folder guides) with the same subset.
 
 Deliberately dependency-free (zip + XML). Tables and images are reduced to their text.
 """

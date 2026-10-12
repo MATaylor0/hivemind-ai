@@ -1,0 +1,61 @@
+# Deploy the org to one environment and run its eval gates. Called by deploy.yml for dev, then prod.
+name: Deploy environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+defaults:
+  run:
+    shell: bash # -eo pipefail: a failing gate fails the step even when piped to tee
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      HIVEMIND_ORG: ${{ vars.HIVEMIND_ORG || 'examples/contoso' }}
+      HIVEMIND_ENV: ${{ inputs.environment }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      AZURE_CONTAINER_REGISTRY_ENDPOINT: ${{ vars.AZURE_CONTAINER_REGISTRY_ENDPOINT }}
+      FOUNDRY_ENDPOINT_DEV: ${{ vars.FOUNDRY_ENDPOINT_DEV }}
+      FOUNDRY_ENDPOINT_PROD: ${{ vars.FOUNDRY_ENDPOINT_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ".[azure]"
+      - uses: Azure/setup-azd@v2
+      - name: Sign in (OIDC)
+        run: |
+          azd auth login --client-id "$AZURE_CLIENT_ID" --federated-credential-provider github --tenant-id "$AZURE_TENANT_ID"
+          azd extension install azure.ai.agents azure.ai.projects azure.ai.routines azure.ai.evaluations
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Validate
+        run: hivemind validate -e "$HIVEMIND_ENV"
+      - name: Plan
+        run: hivemind plan -e "$HIVEMIND_ENV" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Deploy (generate azure.yaml, azd deploy --all)
+        run: hivemind apply -e "$HIVEMIND_ENV" --yes
+      - name: Rules folders for new agents
+        run: hivemind sharepoint provision -e "$HIVEMIND_ENV"
+      - name: Eval gate
+        run: hivemind gate -e "$HIVEMIND_ENV" | tee -a "$GITHUB_STEP_SUMMARY"

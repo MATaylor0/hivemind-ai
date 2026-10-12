@@ -1,6 +1,6 @@
 id: manager
 tier: manager
-description: Owns a team's outcomes. Breaks work down, delegates to reports and checks results.
+description: Owns a team's outcomes. Plans the work, checks its reports' results and escalates.
 model: gpt-5
 instructions:
   - file: instructions/roles/manager.md
